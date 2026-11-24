@@ -17,7 +17,7 @@ export const CurrentUser = createParamDecorator(async (data: keyof UserDto | und
   const combinedUserData = {
     ...user,
     ...userStore,
-     otherStores,
+    otherStores,
   };
   //console.log(request['roles']);
   // Transform to DTO

@@ -25,14 +25,13 @@ import {
   GetTaxonomyDocument,
   GetTaxonomyQuery,
   InventoryQuantity,
-  ProductInput,
+  ProductCreateInput,
   ProductVariantsBulkInput,
   SyncProductsDocument,
   SyncProductsQuery,
 } from 'src/generated/graphql';
 import { print } from 'graphql';
 import { Lock } from 'redlock';
-import { instanceOf } from 'graphql/jsutils/instanceOf';
 import { CacheService } from '../../data/cache/cache.service';
 
 export type ProductsType = {
@@ -305,10 +304,11 @@ export class ProductsConsumer extends WorkerHost {
           product_id: this.extractIdFromGraphQLId(product.id, 'Product'),
           title: variant.title,
           displayName: variant.displayName,
-          price: variant.price,
+          // `Money` is a string scalar in the 2026-10 Admin API ("15.99")
+          price: Number(variant.price),
           sku: variant.sku,
           inventoryQuantity: variant.inventoryQuantity,
-          compareAtPrice: variant.compareAtPrice,
+          compareAtPrice: variant.compareAtPrice != null ? Number(variant.compareAtPrice) : null,
           inventory_item_id: this.extractIdFromGraphQLId(variant.inventoryItem.id, 'InventoryItem'),
           inventory_item_sku: variant.inventoryItem.sku,
           inventory_item_created_at: new Date(variant.inventoryItem.createdAt),
@@ -336,7 +336,8 @@ export class ProductsConsumer extends WorkerHost {
             : product.category != null
               ? await this.getCategoryName(product.category.id)
               : '',
-        admin_graphql_api_id: product.legacyResourceId ? product.legacyResourceId : '',
+        // `legacyResourceId` is an `UnsignedInt64` in 2026-10; the column is a string
+        admin_graphql_api_id: product.legacyResourceId != null ? String(product.legacyResourceId) : '',
         inventoryTotal: product.totalInventory,
         // variants: productVariants,
       };
@@ -681,9 +682,8 @@ export class ProductsConsumer extends WorkerHost {
     console.log(product.title, product.vendor, product.desc, JSON.stringify(product.tags));
     const category = product.product_type;
     const categoryName = await this.getCategoryName(category);
-    // const productData = `(input: {category: "${category}", productType: "${categoryName}", title:"${product.title}",vendor:"${product.vendor}", descriptionHtml:"${product.desc}", tags:${JSON.stringify(product.tags)}})`;
 
-    const input: ProductInput = {
+    const input: ProductCreateInput = {
       category: category,
       productType: categoryName, // instead of taking a custom name, I just use the category name.
       title: product.title,
@@ -698,7 +698,7 @@ export class ProductsConsumer extends WorkerHost {
   };
   private getProductVariantsPayload = (productId: string, data: VariantDto[]): { query: string; variables: object } => {
     try {
-      const variants = data.map(variant => ({
+      const variants: ProductVariantsBulkInput[] = data.map(variant => ({
         optionValues: [
           {
             name: variant.title,
@@ -708,8 +708,9 @@ export class ProductsConsumer extends WorkerHost {
         inventoryItem: {
           sku: variant.sku,
         },
-        price: variant.price,
-        compareAtPrice: variant.compareAtPrice,
+        // `Money` is a string scalar in the 2026-10 Admin API ("15.99")
+        price: String(variant.price),
+        compareAtPrice: String(variant.compareAtPrice),
         inventoryQuantities: variant.inventory.map(inv => ({
           availableQuantity: inv.quantity,
           locationId: `gid://shopify/Location/${inv.locationId}`,
@@ -748,7 +749,8 @@ export class ProductsConsumer extends WorkerHost {
     productEntity.updated_at = new Date(shopifyProduct.updatedAt);
     productEntity.product_type = (await this.getCategoryName(dto.product_type)) ?? '';
     productEntity.tags = dto.tags?.join(',') || '';
-    productEntity.admin_graphql_api_id = shopifyProduct.legacyResourceId;
+    productEntity.admin_graphql_api_id =
+      shopifyProduct.legacyResourceId != null ? String(shopifyProduct.legacyResourceId) : '';
     productEntity.category_id = dto.product_type;
 
     // Compute inventory total from DTO

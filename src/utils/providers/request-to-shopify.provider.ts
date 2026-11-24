@@ -1,6 +1,7 @@
 import { HttpService } from '@nestjs/axios';
 import { Injectable } from '@nestjs/common';
-import { AxiosHeaders, Method } from 'axios';
+import { Method } from 'axios';
+import { ShopifyHeaders } from 'src/utils/types/ShopifyRequestOptions';
 import { ShopifyResponse } from 'src/utils/types/ShopifyResponse';
 
 /**
@@ -12,7 +13,7 @@ export class RequestToShopifyProvider {
   public requestToShopify = async (
     method: Method,
     endpoint: string,
-    headers: AxiosHeaders,
+    headers: ShopifyHeaders,
     payload: Record<string, any>,
   ): Promise<ShopifyResponse> => {
     const reqResult: ShopifyResponse = { status: false, respBody: null };

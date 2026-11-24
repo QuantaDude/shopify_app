@@ -6,7 +6,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { CustomLogger } from './custom-logger/CustomLogger';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
-import * as cookieParser from 'cookie-parser';
+import cookieParser from 'cookie-parser';
 import Request from './types/express'
 async function bootstrap() {
 
@@ -36,6 +36,10 @@ async function bootstrap() {
   app.setBaseViewsDir(join(__dirname, '..', 'views'));
 
   app.setViewEngine('ejs');
+
+  // Let Nest run onModuleDestroy/onApplicationShutdown on SIGINT/SIGTERM
+  // (the Express adapter now also drains in-flight requests on shutdown).
+  app.enableShutdownHooks();
 
   await app.listen(configService.get('port') ?? 3000);
 

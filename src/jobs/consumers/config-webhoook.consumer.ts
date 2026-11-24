@@ -6,10 +6,15 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Store } from 'src/database/entities/store.entity';
 import { Repository } from 'typeorm';
 import { UtilsService } from 'src/utils/utils.service';
-import { AxiosHeaders } from 'axios';
 import { ConfigService } from '@nestjs/config';
 import { ShopifyResponse } from 'src/utils/types/ShopifyResponse';
 import { ShopifyRequestOptions } from 'src/utils/types/ShopifyRequestOptions';
+import {
+  WebhookSubscriptionCreateDocument,
+  WebhookSubscriptionFormat,
+  WebhookSubscriptionTopic,
+} from 'src/generated/graphql';
+import { print } from 'graphql';
 
 type ConfigureJobNames = typeof JOB_TYPES.CONFIGURE_WEBHOOKS;
 
@@ -29,36 +34,41 @@ export class ConfigWebhookConsumer extends WorkerHost {
 
   private readonly logger = new Logger(ConfigWebhookConsumer.name);
 
+  private readonly webhookSubscriptionCreateMutation: string = print(WebhookSubscriptionCreateDocument);
+
+  /**
+   * 'orders/create' (REST topic string) -> 'ORDERS_CREATE' (GraphQL enum)
+   */
+  private toWebhookTopicTopic(topic: string): WebhookSubscriptionTopic {
+    return topic.replace(/\//g, '_').toUpperCase() as WebhookSubscriptionTopic;
+  }
+
   public process = async (job: ConfigureJobs): Promise<JobRegistry[typeof JOB_TYPES.CONFIGURE_WEBHOOKS]['result']> => {
     const storeId = job.data.storeId;
 
     const store = await this.storesRepository.findOneBy({ table_id: storeId });
 
-    const requestOptions: ShopifyRequestOptions = { url: null, headers: null };
-    //console.log(store.access_token)
-    requestOptions.headers = new AxiosHeaders()
-      .set('Content-Type', 'application/json')
-      .set('X-Shopify-Access-Token', store.access_token);
+    const requestOptions: ShopifyRequestOptions = {
+      // REST Admin API is legacy: create webhooks through the GraphQL API
+      url: this.utilsService.getShopifyURLForStore('graphql.json', store),
+      headers: this.utilsService.getGraphQLHeadersForStore(store),
+    };
 
-    requestOptions.url = this.utilsService.getShopifyURLForStore('webhooks.json', store);
-    //const endpoint = this.utilsService.getShopifyURLForStore('webhooks.json', store);
-    //const headers = new AxiosHeaders().set('Content-Type', 'application/json').set('X-Shopify-Access-Token', store.access_token);
     const webhooks_config: string[] = this.configService.get('webhooks');
-    webhooks_config.forEach(async element => {
-      const body = {
-        webhook: {
-          topic: element,
-          address: this.configService.get<string>('app_url') + `/shopify/webhook/${element}`,
-          format: 'json',
+    for (const element of webhooks_config) {
+      requestOptions.data = {
+        query: this.webhookSubscriptionCreateMutation,
+        variables: {
+          topic: this.toWebhookTopicTopic(element),
+          webhookSubscription: {
+            uri: this.configService.get<string>('app_url') + `/shopify/webhook/${element}`,
+            format: WebhookSubscriptionFormat.Json,
+          },
         },
       };
 
-      requestOptions.data = body;
-
       const response: ShopifyResponse = await this.utilsService.requestToShopify('post', requestOptions);
       this.logger.debug(`Response for topic ${element} : ${JSON.stringify(response.respBody)}`);
-    });
-
-    this.logger.debug(JSON.stringify(job));
+    }
   };
 }

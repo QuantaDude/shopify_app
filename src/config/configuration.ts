@@ -12,11 +12,15 @@ export default () => ({
   app_install_URL: `${process.env.APP_URL}/shopify/auth/redirect`,
   refresh_token_URL: `${process.env.APP_URL}/shopify/auth/updateStoreToken`,
 
-  shopify_api_version: process.env.API_VERSION,
+  shopify_api_version: process.env.API_VERSION ?? '2026-10',
   shopify_api_key: process.env.API_KEY,
   shopify_api_secret: process.env.API_SECRET,
   //shopify_api_scopes: 'read_products,write_products,read_orders,write_orders',
-  shopify_embedded_app: false,
+  shopify_app_embedded: process.env.SHOPIFY_APP_EMBEDDED === 'true',
+
+  // Only send `test: true` to appSubscriptionCreate while opted in.
+  // Shopify rejects test charges on production stores.
+  billing_test_mode: process.env.BILLING_TEST_MODE !== 'false',
 
   accessScopes: [
     'read_locations',
@@ -44,19 +48,20 @@ export default () => ({
   jwt_access_token_ttl: parseInt(process.env.JWT_ACCESS_TOKEN_TTL ?? '3600', 10),
 
   database: {
-    host: process.env.DB_HOST,
-    port: parseInt(process.env.DB_PORT, 10) || 3306,
-    type: process.env.DB_TYPE as any,
+    host: process.env.DB_HOST ?? 'localhost',
+    // PostgreSQL is the only supported DB_TYPE; default port 5432
+    port: parseInt(process.env.DB_PORT, 10) || 5432,
+    type: (process.env.DB_TYPE as any) ?? 'postgres',
     name: process.env.DB_NAME,
     username: process.env.DB_USERNAME,
-    password: process.env.DB_PASSWORD.toString(),
-    synchronize: process.env.DB_SYNC === 'true' ? true : false,
-    autoload: process.env.DB_AUTOLOAD === 'true' ? true : false,
-    runMigrationsOnStart: process.env.DB_RUN_MIGRATIONS === 'true' ? true : false,
+    password: process.env.DB_PASSWORD ?? '',
+    synchronize: process.env.DB_SYNC === 'true',
+    autoload: process.env.DB_AUTOLOAD === 'true',
+    runMigrationsOnStart: process.env.DB_RUN_MIGRATIONS === 'true',
   },
 
   redis: {
-    host: process.env.REDIS_HOST.toString() ?? 'localhost',
+    host: process.env.REDIS_HOST ?? 'localhost',
     port: parseInt(process.env.REDIS_PORT ?? '6379', 10),
   },
 

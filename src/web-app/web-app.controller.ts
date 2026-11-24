@@ -27,7 +27,6 @@ import { UserDto } from './dtos/user.dto';
 import { ADMIN, SUPER_ADMIN } from 'src/database/entities/constants/user-roles.constants';
 import { RegisterUserDto } from './dtos/register-member.dto';
 import { newProductDto } from './dtos/new-product.dto';
-import { unwatchFile } from 'fs';
 import { CsrfExceptionFilter } from '../filters/csrf.exception.filter';
 import { RateLimitingGuard } from './guards/rate-limiting.guard';
 
@@ -47,15 +46,15 @@ export class WebAppController {
 
     @Inject(forwardRef(() => AuthService))
     private readonly authService: AuthService,
-  ) {}
+  ) { }
 
   @Public()
   @Get()
   @Render('login')
   public async loginPage(@Req() req: Request, @Res() res: Response) {
 
-   // const token: string = this.utilsService.generateToken(req, res);
-   // console.log(token);
+    // const token: string = this.utilsService.generateToken(req, res);
+    // console.log(token);
     return {
       appName: 'Shopify App',
       style: '',
@@ -71,7 +70,6 @@ export class WebAppController {
       email: body.email,
       password: body.password,
     });
-
     res.cookie('access_token', accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -86,42 +84,49 @@ export class WebAppController {
   @Get('/dashboard')
   public async getDashboard(@CurrentUser() user: UserDto, @Req() req: Request, @Res() res: Response) {
 
-    const token = this.utilsService.generateToken(req, res);
-    //const token = req['generateCsrfToken'](req, res);
-    if (user.hasRole(SUPER_ADMIN)) {
-      const payload = await this.webAppService.getSuperDashboardPayload(user);
-      payload['csrfToken'] = token;
+    try {
+      console.log("this ran")
+      const token = this.utilsService.generateToken(req, res);
+      console.log("this ran")
+      //const token = req['generateCsrfToken'](req, res);
+      if (user.hasRole(SUPER_ADMIN)) {
+        const payload = await this.webAppService.getSuperDashboardPayload(user);
+        payload['csrfToken'] = token;
 
-      res.render('superadmin/home', payload);
-    } else {
-      const payload = await this.webAppService.getDashboardPayload(user);
+        console.log("done")
+        res.render('superadmin/home', payload);
+      } else {
+        const payload = await this.webAppService.getDashboardPayload(user);
 
-      payload['csrfToken'] = token;
-      res.render('home', payload);
+        payload['csrfToken'] = token;
+        res.render('home', payload);
+      }
+      //console.log(recentOrders[0].id)
+    } catch (err) {
+      this.logger.warn(err)
     }
-    //console.log(recentOrders[0].id)
   }
-@Get('/settings')
-public async getSettings(@CurrentUser() user: UserDto, @Req() req: Request, @Res() res: Response) {
-  let payload: object = {};
-  const token = this.utilsService.generateToken(req, res);
-  try {
-    payload = this.webAppService.getBasePayload(user);
-    //payload = await this.webAppService.getOrders(user);
-    payload['csrfToken'] = token;
-  } catch (error) {
-    this.logger.error(error.message);
+  @Get('/settings')
+  public async getSettings(@CurrentUser() user: UserDto, @Req() req: Request, @Res() res: Response) {
+    let payload: object = {};
+    const token = this.utilsService.generateToken(req, res);
+    try {
+      payload = this.webAppService.getBasePayload(user);
+      //payload = await this.webAppService.getOrders(user);
+      payload['csrfToken'] = token;
+    } catch (error) {
+      this.logger.error(error.message);
+    }
+
+    res.render('settings', payload);
   }
 
-  res.render('settings', payload);
-}
-
-@Get('/my-profile')
-public async getMyProfile(@CurrentUser() user: UserDto, @Req() req: Request, @Res() res: Response) {
+  @Get('/my-profile')
+  public async getMyProfile(@CurrentUser() user: UserDto, @Req() req: Request, @Res() res: Response) {
     const payload = this.webAppService.getBasePayload(user);
     payload['csrfToken'] = this.utilsService.generateToken(req, res);
     res.render('profile', payload);
-}
+  }
   /**
    * Only for the super admin
    * */
@@ -268,8 +273,6 @@ public async getMyProfile(@CurrentUser() user: UserDto, @Req() req: Request, @Re
 
   @Get('/syncStoreLocations')
   public async syncLocations(@Req() req: Request, @CurrentUser() user: UserDto, @Res() res: Response) {
-    //console.log(req['user']);
-    console.log(user);
     try {
       if (user.can(['all_access', 'write_locations'])) {
         const result = await this.webAppService.syncLocations(user, res);
@@ -301,7 +304,7 @@ public async getMyProfile(@CurrentUser() user: UserDto, @Req() req: Request, @Re
   }
   @Get('/syncProductTypes')
   public async syncProductTypes(@CurrentUser() user: UserDto, @Res() res: Response) {
-    if(user.can(['all_access', 'write_product_types']) || user.hasRole('SUPER_ADMIN')) {
+    if (user.can(['all_access', 'write_product_types']) || user.hasRole('SUPER_ADMIN')) {
       this.webAppService.syncProductTypes(user.store);
     } else {
       res.status(401).json({ success: false });
@@ -320,11 +323,11 @@ public async getMyProfile(@CurrentUser() user: UserDto, @Req() req: Request, @Re
       if (user.can(['all_access', 'write_products'])) {
         const result = await this.webAppService.createProduct(user, product);
         if (typeof result != 'boolean') {
-          if(result.status == 'AUTH_REQUIRED'){
-            res.send({redirect_url:result.url});
+          if (result.status == 'AUTH_REQUIRED') {
+            res.send({ redirect_url: result.url });
             return;
           }
-          res.send({error: result.status});
+          res.send({ error: result.status });
           return;
         }
         console.log('this');

@@ -62,12 +62,9 @@ export class OrdersConsumer extends WorkerHost {
           throw new Error('Invalid job name');
       }
     } catch (error) {
-      await job.moveToFailed(new UnrecoverableError(`401`), job.token);
-
-      if (error.message == '401') {
-        console.log('yes');
-        // job.moveToCompleted(error, undefined);
-        //job.moveToFailed(error, job.token);
+      // Only mark unrecoverable for token expiry; other errors stay retryable
+      if (error['isTokenExpired'] || error.message == '401') {
+        await job.moveToFailed(new UnrecoverableError(`401`), job.token);
       }
       throw error;
     }
@@ -90,10 +87,6 @@ export class OrdersConsumer extends WorkerHost {
       const response = await this.utilsService.requestToShopify<SyncOrdersQuery>('post', options);
       //console.log(JSON.stringify(response))
       if (response.statusCode == 401) {
-        // job.moveToFailed(Error('401'), job.token)
-        //job.moveToCompleted(Error('401'), job.token);
-        //job.remove()
-        console.log('yes');
         throw new TokenExpiredException(`Token expired for ${data.store.table_id}`, {
           shop: data.store.table_id.toString(),
           jobId: job.id,
@@ -103,9 +96,6 @@ export class OrdersConsumer extends WorkerHost {
       }
       //throw Error('401');
       if (response.statusCode == 200) {
-        console.log('this ran')
-        console.log(JSON.stringify(response))
-        //console.log(response.respBody["data"]['orders']['edges']);
         await this.saveOrdersInDB(store.table_id, response.respBody);
       }
       //console.log(response.respBody['extensions']['cost']['fields']);
@@ -128,14 +118,13 @@ export class OrdersConsumer extends WorkerHost {
       //need to remove creating Date objects and JSON
       const formattedOrders = orders.orders.edges.map(order => {
         const node = order.node;
-        console.log(node);
-        //console.log(node.fulfillments);
         const orderFormatted: Order = {
           email: node.email,
           name: node.name,
           processed_at: new Date(node.processedAt),
           taxes_included: node.taxesIncluded,
-          id: this.extractIdFromGraphQLId(node.legacyResourceId),
+          // `legacyResourceId` is `UnsignedInt64` (a number) in 2026-10
+          id: node.legacyResourceId,
           financial_status: node.displayFinancialStatus,
           closed_at: new Date(node.closedAt),
           cancel_reason: node.cancelReason,
@@ -191,7 +180,6 @@ export class OrdersConsumer extends WorkerHost {
         )
         .execute(); 
       */
-      console.log(formattedOrders)
       const query = this.ordersRepository.create(formattedOrders);
       await this.ordersRepository.upsert(query, ['id']);
     } catch (error) {

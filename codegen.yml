@@ -1,14 +1,25 @@
 overwrite: true
-schema: 'https://shopify.dev/admin-graphql-direct-proxy/2024-07'
-documents: './src/**/*.graphql'
+# Curated 2026-10 Admin API SDL (see the header of that file for details).
+# To use the full schema from a store instead, point `schema` at
+# https://<shop>.myshopify.com/admin/api/2026-10/graphql.json with auth headers.
+schema: 'src/queries/schema/admin-2026-10.graphql'
+documents: './src/queries/*.graphql'
 generates:
   src/generated/graphql.ts:
     plugins:
       - 'typescript'
       - 'typescript-operations'
-      - 'typescript-graphql-request'
+      - 'typed-document-node'
     config:
+      preResolveTypes: true
       scalars:
         DateTime: string
         HTML: string
         URL: string
+        Decimal: number
+        Money: string
+        UnsignedInt64: number
+        JsonString: any
+        MoneyBigDecimal: number
+        CustomerEmailMarketingConsentState: string
+        CustomerSmsMarketingConsentState: string

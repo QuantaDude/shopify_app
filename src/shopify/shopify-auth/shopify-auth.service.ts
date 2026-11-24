@@ -37,16 +37,16 @@ export class ShopifyAuthService {
   public isAccessTokenValid = async (storeDetails: Store): Promise<boolean> => {
     try {
       if (storeDetails.access_token.length > 0) {
-        const endpoint = this.utilsService.getShopifyStoreURL('shop.json', storeDetails);
-        const headers = new AxiosHeaders()
-          .set('Content-Type', 'application/json')
-          .set('X-Shopify-Access-Token', storeDetails.access_token);
+        // REST Admin API is legacy: verify the token with a minimal GraphQL query
         const options: ShopifyRequestOptions = {
-          url: endpoint,
-          headers: headers,
+          url: this.utilsService.getShopifyURLForStore('graphql.json', storeDetails),
+          headers: new AxiosHeaders()
+            .set('Content-Type', 'application/json')
+            .set('X-Shopify-Access-Token', storeDetails.access_token),
+          data: { query: '{ shop { id } }' },
         };
 
-        const response: ShopifyResponse = await this.utilsService.requestToShopify('get', options);
+        const response: ShopifyResponse = await this.utilsService.requestToShopify('post', options);
 
         return response.statusCode === 200;
       }
@@ -126,8 +126,6 @@ export class ShopifyAuthService {
         data: { query: this.storeDetailsQuery },
       };
 
-      //options.url = this.utilsService.getShopifyStoreURL('shop.json', shop_domain);
-
       options.headers = new AxiosHeaders()
         .set('Content-Type', 'application/json')
         .set('X-Shopify-Access-Token', accessToken);
@@ -155,7 +153,7 @@ export class ShopifyAuthService {
   };
 
   /**
-   * Saves store details to the database, in store_table. CreateShopDTO has all the key value pairs that the shopify server returns for requesting the shop.json
+   * Saves store details to the database, in store_table. CreateShopDTO has all the key value pairs that the shopify server returns for the shop GraphQL query
    */
   public saveStoreDetails = async (
     shopDetails:  GetStoreDetailsQuery['shop'],

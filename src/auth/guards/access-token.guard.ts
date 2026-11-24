@@ -25,12 +25,12 @@ export class AccessTokenGuard implements CanActivate {
     private readonly jwtConfig: ConfigType<typeof jwtConfiguration>,
 
     private dataService: DataService,
-  ) {}
+  ) { }
 
-  private extractToken = (request: TRequest <Record<string, any>, { storeId?: string }>): string | undefined => {
+  private extractToken = (request: TRequest<Record<string, any>, { storeId?: string }>): string | undefined => {
     // console.log(request.body);
 
-    const [_, token] = request.headers.authorization?.split(' ') ?? [];
+    const [_, token] = String(request.headers.authorization ?? '').split(' ');
     return token;
   };
 
@@ -54,6 +54,7 @@ export class AccessTokenGuard implements CanActivate {
     }
 
     try {
+      console.log("This ran!");
       const payload = await this.jwtService.verifyAsync(token, this.jwtConfig);
 
       request[REQUEST_USER_KEY] = payload;

@@ -122,7 +122,6 @@ export class CustomersConsumer extends WorkerHost {
 
       const formattedCustomers = customers.map(node => {
         const customer = node.node;
-        //console.log(customer);
         return {
           id: this.extractId(customer.id),
           store_id: storeId,
@@ -134,14 +133,14 @@ export class CustomersConsumer extends WorkerHost {
           created_at: customer.createdAt,
           updated_at: customer.updatedAt,
           default_address: customer.defaultAddress,
-          accepts_marketing: customer.smsMarketingConsent, //+ customer.emailMarketingConsent,
+          // 2026-10: the consent objects were replaced by state scalars
+          accepts_marketing: customer.smsMarketingConsent ?? customer.emailMarketingConsent,
 
           orders_count: 0,
           currency: 'Rupees',
-          admin_graphql_api_id: 'bogus',
+          admin_graphql_api_id: customer.id,
         };
       });
-      console.log(formattedCustomers);
       customersCreated = this.customersRepository.create(formattedCustomers);
       await this.customersRepository.upsert(formattedCustomers, ['id', 'store_id']);
       /* await this.customersRepository
@@ -230,16 +229,10 @@ export class CustomersConsumer extends WorkerHost {
                                     }
                                 }
                             }
-                            smsMarketingConsent {
-                                marketingState
-                                marketingOptInLevel
-                                consentUpdatedAt
-                            }
-                            emailMarketingConsent {
-                                marketingState
-                                marketingOptInLevel
-                                consentUpdatedAt
-                            }
+                            // 2026-10: consent fields are state scalars now,
+                            // they no longer have sub-fields
+                            smsMarketingConsent
+                            emailMarketingConsent
                         }
                     }
                     pageInfo {

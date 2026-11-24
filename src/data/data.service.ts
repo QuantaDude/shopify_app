@@ -26,7 +26,6 @@ export class DataService {
   private readonly NONCE_EXPIRY = '120s';
 
   constructor(
-    //@Inject(CACHE_MANAGER) private cacheManager: Cache,
     private readonly cacheService: CacheService,
     @Inject('CACHE_LOCK') private readonly redLock: Redlock,
     //private readonly redLock: RedlockService,
@@ -59,7 +58,7 @@ export class DataService {
   public getAllStoresForUser = async (userId: number): Promise<UserStore[]> => {
     const stores: UserStore[] = await this.userStoreRepository.find({
       where: { user_id: userId },
-      relations: ['store'],
+      relations: { store: true },
     });
     return stores;
   };
@@ -107,11 +106,13 @@ export class DataService {
   public getCurrentPlan = async (storeId: number): Promise<StorePlan> => {
     try {
       const cacheCredits = await this.cacheService.get<number>(`${storeId}-credits`);
-      console.log(cacheCredits);
       const dbResult = await this.storePlanRepository.findOne({ where: { store_id: storeId } });
-      console.log(dbResult.credits);
-      if (cacheCredits != undefined || !isNaN(cacheCredits)) {
+      if (dbResult != null && cacheCredits != undefined && !isNaN(cacheCredits)) {
         dbResult.credits = cacheCredits;
+      }
+      if (dbResult == null) {
+        // avoid returning `null` typed as StorePlan
+        return new StorePlan();
       }
       return dbResult;
     } catch (error) {
@@ -165,8 +166,12 @@ export class DataService {
       } //pending plan was set from the billing function, set the plan active, store charge history, add credits
       else {
         if (chargeObj.status == 'ACTIVE') {
-          // I could fetch the plan relation within the findOne function
-          const plan: Plan = await this.getPlans()[storePlan.plan_id - 1];
+          // Look the plan up by id instead of relying on insertion order
+          const plans: Plan[] = await this.getPlans();
+          const plan: Plan | undefined = plans.find(pl => pl.id === storePlan.plan_id);
+          if (plan == null) {
+            throw new Error(`Plan ${storePlan.plan_id} not found`);
+          }
           const lock: Lock = await this.getStoreCreditsLock(storePlan.store_id);
 
           if (lock != null || lock != undefined) {
@@ -212,7 +217,8 @@ export class DataService {
     }
 
     // Start transaction
-    const queryRunner = this.storePlanRepository.manager.connection.createQueryRunner();
+    // TypeORM 1.x: `manager.connection` was renamed to `manager.dataSource`
+    const queryRunner = this.storePlanRepository.manager.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
 
@@ -308,7 +314,7 @@ export class DataService {
   };
   public getUsersForStore = async (storeId: number): Promise<UserStore[]> => {
     try {
-      return await this.userStoreRepository.find({ where: { store_id: storeId }, relations: ['user'] });
+      return await this.userStoreRepository.find({ where: { store_id: storeId }, relations: { user: true } });
     } catch (error) {
       this.logger.error(error.message, error.stack);
     }
@@ -572,7 +578,6 @@ export class DataService {
   /**
    * This function is specifically used in guards to authorize
    * */
-  @UseFilters(RequestExceptionFilter)
   public async findOneByEmail(email: string): Promise<{ User: User; UserStore: UserStore[] }> {
     let user: User | undefined = undefined;
     let userRoles: UserStore[] | undefined = undefined;
@@ -597,7 +602,7 @@ export class DataService {
         where: {
           user_id: user.user_id,
         },
-        relations: ['store'],
+        relations: { store: true },
       });
     } catch (error) {
       throw new RequestTimeoutException(error, {
@@ -615,7 +620,6 @@ export class DataService {
   /**
    * This function is specifically used in guards to authorize
    * */
-  @UseFilters(RequestExceptionFilter)
   public async findOneById(userid: number): Promise<{ User: User; UserStore: UserStore[] }> {
     let user: User | undefined = undefined;
     let userRoles: UserStore[] | undefined = undefined;
@@ -655,7 +659,6 @@ export class DataService {
   /**
    * This function is specifically used in guards to authorize
    * */
-  @UseFilters(RequestExceptionFilter)
   public async findStore(userid: number): Promise<Store> {
     let store: Store;
     try {
@@ -705,7 +708,7 @@ export class DataService {
     if (storeId && typeof storeId != undefined) {
       const storeContext = await this.userStoreRepository.findOne({
         where: { user_id: userId, store_id: storeId },
-        relations: ['store'],
+        relations: { store: true },
       });
 
       if (storeContext) return storeContext;
@@ -715,7 +718,7 @@ export class DataService {
     const storeContexts = await this.userStoreRepository.find({
       where: { user_id: userId },
       order: { store_id: 'DESC' }, // Primary stores first
-      relations: ['store'],
+      relations: { store: true },
     });
 
     if (!storeContexts.length) {

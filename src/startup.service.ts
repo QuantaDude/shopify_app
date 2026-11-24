@@ -29,38 +29,30 @@ export class StartupService implements OnApplicationBootstrap {
         }
       });
 
-      //add cron jobs to the respective bullmq queues.
-      this.jobsService.addJob(
+      // Recurring jobs are Job Schedulers since BullMQ 6 (the legacy
+      // `repeat` job option was removed in v6).
+      this.jobsService.upsertJobScheduler(
         JOB_TYPES.CHECK_PENDING_PAYMENTS,
-        {},
-        {
-        attempts: 1,
-        repeat: { pattern: CronExpression.EVERY_5_SECONDS },
-        backoff: { delay: 1000, type: 'exponential' },
-      });
+        { pattern: CronExpression.EVERY_5_SECONDS },
+        { data: {}, opts: { attempts: 1, backoff: { delay: 1000, type: 'exponential' } } },
+      );
 
-      this.jobsService.addJob(
+      this.jobsService.upsertJobScheduler(
         JOB_TYPES.SYNC_STORES,
-        {},
-        {
-          attempts: 3,
-          repeat: { pattern: CronExpression.EVERY_MINUTE },
-          backoff: { delay: 5000, type: 'exponential' },
-        });
+        { pattern: CronExpression.EVERY_MINUTE },
+        { data: {}, opts: { attempts: 3, backoff: { delay: 5000, type: 'exponential' } } },
+      );
 
       //stub store to fetch product types from shopify
       const store = await this.jobsService.getStore(32);
       if (store && store != null) {
         this.jobsService.addJob(JOB_TYPES.SYNC_PRODUCT_TYPES, { store: store });
         // will not sync if the stub store's access token is not an offline token and has expired.
-        this.jobsService.addJob(
+        this.jobsService.upsertJobScheduler(
           JOB_TYPES.SYNC_PRODUCT_TYPES,
-          { store: store },
-          {
-          attempts: 3,
-          repeat: { pattern: CronExpression.EVERY_2_HOURS },
-          backoff: { delay: 5000, type: 'exponential' },
-        } );
+          { pattern: CronExpression.EVERY_2_HOURS },
+          { data: { store }, opts: { attempts: 3, backoff: { delay: 5000, type: 'exponential' } } },
+        );
         // const result = await this.syncProductTypes(store);
         // if (result != null && result.status == 'AUTH_REQUIRED') {
         //   this.logger.error("stub store's access token has expired, manual OAuth needed.");

@@ -4,138 +4,115 @@
   <img src="https://img.icons8.com/?size=120&id=BRIdulMG66MK&format=png&color=000000" />
 </p>
 <p align="center">
-<img src="https://img.icons8.com/?size=80&id=nCj4PvnCO0tZ&format=png&color=000000" alt="TypeScript"/>
+<img src="https://img.icons8.com/?size=80&id=kg46nzoJrmTR&format=png&color=000000" alt="TypeScript"/>
 <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="80" alt="Nest" /></a>
-<img src="https://img.icons8.com/?size=80&id=kg46nzoJrmTR&format=png&color=000000" alt="ExpressJS"/>
-<img src="https://img.icons8.com/?size=80&id=Pv4IGT0TSpt8&format=png&color=000000" alt="PostgreSQL"/>
-<img src="https://img.icons8.com/?size=80&id=KRA1PoZgRrca&format=png&color=000000" alt="GraphQL"/>
-<img src="https://img.icons8.com/?size=80&id=lhwQTv6iwznO&format=png&color=000000" alt="GraphQL"/>
+<img src="https://img.icons8.com/?size=80&id=Pv4IGT0TSpt8&format=png&color=000000" alt="ExpressJS"/>
+<img src="https://img.icons8.com/?size=80&id=KRA1PoZgRrca&format=png&color=000000" alt="PostgreSQL"/>
+<img src="https://img.icons8.com/?size=80&id=lhwQTv6iwznY&format=png&color=000000" alt="GraphQL"/>
 </p>
 
 ## Description
 
-A shopify stores management app.
+A Shopify stores management app.
+
+**Stack:** NestJS 12.4 · TypeORM 1.1 · PostgreSQL · GraphQL Admin API `2026-10` · BullMQ 6 · Redis · EJS server-rendered views · Vitest
+
+## Requirements
+
+- **Node.js >= 20.19** (22.12+ or 24.x recommended; the framework packages are ESM-only and loaded through `require(esm)`)
+- PostgreSQL
+- Redis
 
 ## Project setup
 
 ```bash
 $ npm install
 
-# generate graphql types
+# generate the GraphQL types (Shopify Admin API 2026-10)
 $ npm run graphql:types
+
+# build
+$ npm run build
+
+# tests (unit + e2e; e2e needs PostgreSQL + Redis running)
+$ npm test
+$ npm run test:e2e
 ```
 
-### Environment file config:
+> `npm install` uses `legacy-peer-deps` (see `.npmrc`): TypeORM 1.1 declares an
+> optional peer on `ioredis@^5` for its (unused here) Redis cache feature, which
+> conflicts with the ioredis 6 this app uses.
 
-.env.development:
+### Environment file config
 
-```
-# use .env.development for development environments
+Copy `env_format.env` to `.env.development` (development) / `.env` (production) and fill in the values:
 
+```ini
 PORT=3000
-APP_SECRET=9d6a1925450ba0f4815bfa0860127fbe
+APP_SECRET=<random string>
 
-API_VERSION=2024-07
+# Shopify app credentials + Admin API version
+API_VERSION=2026-10
 API_SECRET=<shopify app client secret>
 API_KEY=<shopify app client ID>
 
-APP_URL=https://rnxxf-223-233-71-49.a.free.pinggy.link
+APP_URL=<public url of the app>
 
-CSRF_SECRET=v123er$%123ylongtex123t
+CSRF_SECRET=<random string>
 
-JWT_SECRET=df411400674f6d54db83d1a050e6ae6b018d750e36a615c332e1861bb0f22e36
-JWT_TOKEN_AUDIENCE=https://d1a4-223-233-67-231.ngrok-free.app
+JWT_SECRET=<random string>
+JWT_TOKEN_AUDIENCE=<app url>
 JWT_TOKEN_ISSUER=localhost:3000
 JWT_ACCESS_TOKEN_TTL=3600
-#Enable all logging
-#LOGGING=true
-
-# Enable file logging
-LOG_TO_FILE=true
-
-# Or enable specific log levels
-LOGGING=debug,error,warn,log
 
 DB_TYPE=postgres
+DB_HOST=localhost
 DB_PORT=5432
-DB_USERNAME=<DB_USERNAME>
-DB_PASSWORD=<PASSWORD>
-DB_HOST="localhost"
-DB_NAME="shopify_app"
-DB_SYNC="false"
-DB_AUTOLOAD="true"
-DB_RUN_MIGRATIONS="false"
+DB_USERNAME=<user>
+DB_PASSWORD=<password>
+DB_NAME=shopify_app
+DB_SYNC=false            # schema sync (dev only)
+DB_AUTOLOAD=true
+DB_RUN_MIGRATIONS=true   # run migrations on boot
+
 REDIS_HOST=localhost
 REDIS_PORT=6379
 
-
-# Stripe related config
-STRIPE_API_KEY=
-STRIPE_API_SECRET=
-
+# appSubscriptionCreate test charges (dev stores only)
+BILLING_TEST_MODE=true
 ```
-edit ./src/config/configuration.ts:
-```typescript
-  app_url: 'https://xyz.com',
-  app_install_URL: 'https://xyz.com/shopify/auth/redirect',
-  refresh_token_URL: 'https://xyz.com/shopify/auth/updateStoreToken',
-```
-Add these routes to your allowed redirection URLs:
 
-\*/shopify/auth/updateStoreToken
+### GraphQL types
 
-\*/shopify/auth/redirect
-
-## Compile and run the project
+`src/generated/graphql.ts` is generated from the curated Admin API SDL in
+`src/queries/schema/admin-2026-10.graphql` (see its header for why the schema
+is vendored and how to swap in a store-endpoint introspection instead).
 
 ```bash
-# development watch mode
+$ npm run graphql:types
+```
+
+### Database migrations & seeds
+
+```bash
+$ npm run migration:generate   # after changing entities
+$ npm run migration:run
+$ npm run migration:revert
+$ npm run seed                 # seed plans
+```
+
+## Run
+
+```bash
+# development
 $ npm run start:dev
 
-# watch mode
-$ npm run start:dev
-
-# production mode
+# production
+$ npm run build
 $ npm run start:prod
 ```
 
-## View Documentation
+## Docs
 
-```bash
-# install compodoc
-$ npm install -g @compodoc/compodoc
-
-# build and serve documentation
-npm run doc
-
-```
-
-go to http://127.0.0.1:3001
-
-# Checklist and To-Do
-### Done
-- [x] View Products.
-- [x] Sync Products.
-- [x] Create Products.
-- [x] View and Sync Orders.
-- [x] View team store's team members.
-- [x] Create new members with privileges.
-- [x] Billing and consuming credits.
-### To be done
-- [ ] Add private stores.
-- [ ] Fulfill paid orders.
-### What I might do
-- [ ] Add subscriptions/ stripe gateway (to charge private app usage).
-- [ ] Edit customer, product, order details
-## Run tests
-
-```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
-```
+See [MIGRATION.md](./MIGRATION.md) for the full record of the
+NestJS 11 → 12 / TypeORM 0.3 → 1 / Shopify 2024-07 → 2026-10 migration.

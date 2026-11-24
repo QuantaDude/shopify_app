@@ -1,24 +1,36 @@
 {
   "compilerOptions": {
-    "typeRoots": [
-      "./node_modules/@types",
-      "./src/types/express"  // Point to your custom types directory
-    ],
-    "module": "commonjs",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "resolvePackageJsonExports": true,
+    "esModuleInterop": true,
     "declaration": true,
     "removeComments": true,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
     "allowSyntheticDefaultImports": true,
-    "target": "ES2021",
+    "target": "ES2023",
+    "typeRoots": [
+      "./node_modules/@types",
+      "./src/types/express"
+    ],
+    "paths": {
+      "src/*": [
+        "./src/*"
+      ]
+    },
+    "types": [
+      "node"
+    ],
     "sourceMap": true,
     "outDir": "./dist",
-    "baseUrl": "./",
+    "rootDir": ".",
     "incremental": true,
     "skipLibCheck": true,
-    "strictNullChecks": false,
+    "strict": false,
+    "strictPropertyInitialization": false,
+    "useUnknownInCatchVariables": false,
     "noImplicitAny": false,
-    "strictBindCallApply": false,
     "forceConsistentCasingInFileNames": false,
     "noFallthroughCasesInSwitch": false
   }

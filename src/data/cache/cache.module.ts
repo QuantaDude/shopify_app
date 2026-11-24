@@ -3,13 +3,11 @@ import { Inject, Module, OnApplicationShutdown } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { Cacheable, Keyv } from 'cacheable';
 import { CacheService } from './cache.service';
-//import { RedlockModule } from '@anchan828/nest-redlock';
-import redlockConfig from './cache.config';
 import Client from 'ioredis';
 import Redlock from 'redlock';
 
 @Module({
-  imports: [ConfigModule.forFeature(redlockConfig)],
+  imports: [ConfigModule],
   providers: [
     {
       provide: 'REDIS_CLIENT',

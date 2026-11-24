@@ -86,19 +86,13 @@ export class JobsService {
     const event = this.queueEventsMap[queueName];
     const job = await queue.add(type, data, opts);
     try {
-      console.log(job.name);
-      const result = (await job.waitUntilFinished(event, 30000)) as Promise<JobRegistry[T]['result']>;
-      return result;
+      const result = await job.waitUntilFinished(event, 30000);
+      return result as JobRegistry[T]['result'];
     } catch (error) {
-      console.log(JSON.stringify(error), job.name);
       if (error.message == '401' || job.failedReason == '401') {
-        //console.log(await job.isFailed());
-        //job.moveToFailed(error, job.token)
-        //job.remove();
-
-        //Since the SYNC_PRODUCT_TYPES is mainly a background/cron job, we don't add it to pause queue
-        if(job.name != JOB_TYPES.BUY_STORE_PLAN) {
-          const pausedJob = await this.pausedQueue.add(
+        // Since the SYNC_PRODUCT_TYPES is mainly a background/cron job, we don't add it to pause queue
+        if (job.name != JOB_TYPES.BUY_STORE_PLAN && job.data['store']?.myshopify_domain) {
+          await this.pausedQueue.add(
             job.queueName + ':' + job.data['store'].myshopify_domain + ':' + type,
             { queue: job.queueName, jobName: job.name, id: job.id, task_type: type },
             { jobId: job.data['store']['myshopify_domain'] },
@@ -106,7 +100,8 @@ export class JobsService {
         }
         return {
           status: 'AUTH_REQUIRED',
-          shopDomain: job.data.myshopify_domain,
+          // previously read a non-existent key, so shopDomain was always undefined
+          shopDomain: job.data['store']?.myshopify_domain,
         } as errorResult;
       }
       this.logger.debug(JSON.stringify(error) + JSON.stringify(job.data));
@@ -160,10 +155,7 @@ export class JobsService {
       const pausedJob = await this.pausedQueue.getJob(store_domain);
       const requiredId = pausedJob.data.id;
       const queueName = pausedJob.data.queue;
-      // const failedProductJobs = await this.productQueue.getFailed();
-      // const failedOrderJobs = await this.ordersQueue.getFailed();
       let job: Job;
-      console.log('in resumePausedJobsForStore, queue name to resume', pausedJob.data.queue);
       switch (queueName) {
         case QUEUES.PRODUCTS:
           job = await this.productQueue.getJob(requiredId);
@@ -178,15 +170,42 @@ export class JobsService {
       //const job = await this.productQueue.getJob(requiredId);
       job.data['store']['access_token'] = accssToken;
       await job.updateData(job.data);
-      console.log('updated', job.data);
 
       await job.extendLock(job.token, 10000);
 
       await job.retry('failed');
-      this.pausedQueue.remove(store_domain);
+      await this.pausedQueue.remove(store_domain);
     } catch (error) {
-      console.log(error);
+      this.logger.error(error.message, error.stack, this.resumePausedJobsForStore.name);
     }
   };
+
+  /**
+   * Registers (or updates) a Job Scheduler for a recurring job.
+   *
+   * BullMQ 6 removed the legacy `repeat` job option; recurring work is now
+   * expressed as Job Schedulers (`upsertJobScheduler`). The scheduler produces
+   * jobs named after `type`, so existing consumers keep working unchanged.
+   */
+  public async upsertJobScheduler<T extends JobType>(
+    type: T,
+    rule: { pattern: string; tz?: string },
+    jobTemplate: { data?: JobRegistry[T]['data']; opts?: JobsOptions } = {},
+  ): Promise<void> {
+    const queueName = jobToQueueMap[type];
+    const queue = this.queues[queueName];
+    if (!queue) {
+      throw new Error(`No queue registered for job type ${type}`);
+    }
+    // Jobs produced by the scheduler are named after `type`, so the
+    // consumers' `switch (job.name)` keeps matching.
+    await queue.upsertJobScheduler(type, rule, {
+      name: type,
+      data: jobTemplate.data,
+      opts: jobTemplate.opts,
+    });
+    this.logger.log(`Job scheduler upserted: ${type} (${rule.pattern})`);
+  }
+
 
 }

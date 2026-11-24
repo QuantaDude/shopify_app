@@ -58,7 +58,7 @@ export class UsersConsumer extends WorkerHost {
   ): Promise<JobRegistry[typeof JOB_TYPES.GET_STORES_FOR_USER]['result']> => {
     const stores: UserStore[] = await this.userStoresRepository.find({
       where: { user_id: data.userId },
-      relations: ['store'],
+      relations: { store: true },
     });
     console.log(stores[0].store.IsPrivate());
     return stores;
@@ -68,7 +68,7 @@ export class UsersConsumer extends WorkerHost {
     data: JobRegistry[typeof JOB_TYPES.GET_USERS]['data'],
   ): Promise<UserStore[]> => {
     try {
-      return await this.userStoresRepository.find({ where: { store_id: data.storeId }, relations: ['user'] });
+      return await this.userStoresRepository.find({ where: { store_id: data.storeId }, relations: { user: true } });
     } catch (error) {
       this.logger.error(error.message, this.retrieveUsersForStore.name);
     }

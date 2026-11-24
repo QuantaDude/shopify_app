@@ -103,7 +103,8 @@ export class StoresConsumer extends WorkerHost {
   private syncStores = async (): Promise<void> => {
     let queryRunner: QueryRunner;
     try {
-      queryRunner = this.storePlansRepository.manager.connection.createQueryRunner();
+      // TypeORM 1.x: `manager.connection` was renamed to `manager.dataSource`
+      queryRunner = this.storePlansRepository.manager.dataSource.createQueryRunner();
       await queryRunner.connect();
       await queryRunner.startTransaction();
       const storesToSync = await this.cacheService.get<Array<number>>('credits-keys');
@@ -154,7 +155,8 @@ export class StoresConsumer extends WorkerHost {
       returnUrl:
         this.configService.get<string>('app_url') +
         `/shopify/rac?planId=${selectedPlan.id}&userId=${data.userId}&storeId=${data.store.id}`,
-      test: true,
+      // Only dev stores accept test charges; toggle with BILLING_TEST_MODE
+      test: this.configService.get<boolean>('billing_test_mode') ?? true,
       lineItems: {
         plan: {
           appRecurringPricingDetails: {
@@ -276,12 +278,12 @@ export class StoresConsumer extends WorkerHost {
       headers: this.utilsService.getGraphQLHeadersForStore(store),
     };
 
-    const cursor: string | null = null;
+    // Follow pagination: previously only the first page was ever fetched
+    let cursor: string | null = null;
     do {
       options.data = this.getQueryObjForLocations(cursor);
       const response: ShopifyResponse = await this.utilsService.requestToShopify('post', options);
 
-      console.log(response);
       if (response.statusCode === 401) {
         throw new TokenExpiredException(`Token expired for ${data.store.table_id}`, {
           shop: data.store.table_id.toString(),
@@ -294,6 +296,10 @@ export class StoresConsumer extends WorkerHost {
           store.table_id,
         );
         locations.push(...result);
+        const pageInfo = response.respBody['locations']['pageInfo'];
+        cursor = pageInfo?.hasNextPage === true ? pageInfo['endCursor'] : null;
+      } else {
+        cursor = null;
       }
     } while (cursor !== null);
 
@@ -416,16 +422,16 @@ export class StoresConsumer extends WorkerHost {
   private isAccessTokenValid = async (storeDetails: Store): Promise<boolean> => {
     try {
       if (storeDetails.access_token.length > 0) {
-        const endpoint = this.utilsService.getShopifyStoreURL('shop.json', storeDetails);
-        const headers = new AxiosHeaders()
-          .set('Content-Type', 'application/json')
-          .set('X-Shopify-Access-Token', storeDetails.access_token);
+        // REST Admin API is legacy: verify the token with a minimal GraphQL query
         const options: ShopifyRequestOptions = {
-          url: endpoint,
-          headers: headers,
+          url: this.utilsService.getShopifyURLForStore('graphql.json', storeDetails),
+          headers: new AxiosHeaders()
+            .set('Content-Type', 'application/json')
+            .set('X-Shopify-Access-Token', storeDetails.access_token),
+          data: { query: '{ shop { id } }' },
         };
 
-        const response: ShopifyResponse = await this.utilsService.requestToShopify('get', options);
+        const response: ShopifyResponse = await this.utilsService.requestToShopify('post', options);
 
         return response.statusCode === 200;
       }

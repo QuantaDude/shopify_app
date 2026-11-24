@@ -10,5 +10,5 @@ export interface TRequest<B, Q extends Query> extends Express.Request {
   user?: User;
   query?: Q;
   body?: B;
-  headers: Record<string, unkown>;
+  headers: Record<string, unknown>;
 }

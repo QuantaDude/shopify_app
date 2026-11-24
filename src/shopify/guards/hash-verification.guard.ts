@@ -36,11 +36,10 @@ export class HashVerificationGuard implements CanActivate {
     const calculatedHmac = createHmac('sha256',  this.api_secret).update(rawRequest.rawBody)
       .digest('base64');
 
-    console.log(calculatedHmac,"  " , hmac);
-    if (!timingSafeEqual(
-      Buffer.from(calculatedHmac, 'utf8'),
-      Buffer.from(hmac, 'utf8'),
-    )){
+    const a = Buffer.from(calculatedHmac, 'utf8');
+    const b = Buffer.from(hmac, 'utf8');
+    // timingSafeEqual throws when buffer lengths differ
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
       this.logger.debug('HMAC verification failed');
       throw new UnauthorizedException('Invalid header signature, Bad Request');
     }

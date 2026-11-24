@@ -11,13 +11,12 @@ import { Observable } from 'rxjs';
 
 @Injectable()
 export class RateLimitingGuard extends ThrottlerGuard {
-  getJWTTracker = async (req): Promise<string> =>
-  {
+  getJWTTracker = async (req): Promise<string> => {
     return (req.headers.authorization != undefined) ? req.headers.authorization?.split(' ')[1] : null;
   }
 
   protected async handleRequest(requestProps: ThrottlerRequest): Promise<boolean> {
-    
+
     const { req, res } = this.getRequestResponse(requestProps.context);
 
     //if there are user agents (clients) to be ignored
@@ -32,18 +31,16 @@ export class RateLimitingGuard extends ThrottlerGuard {
 
     const tracker = await this.getTracker(req);
     const key = this.generateKey(requestProps.context, requestProps.throttler.name, tracker);
-    
+
     const { totalHits, timeToExpire } = await this.storageService.increment(key, requestProps.ttl, requestProps.limit, requestProps.blockDuration, requestProps.throttler.name);
 
     const JWTtracker = await this.getJWTTracker(req);
     if (JWTtracker != null) {
-      console.log('JWT found in header')
       const JWTKey = this.generateKey(requestProps.context, requestProps.throttler.name, JWTtracker);
 
       const { totalHits: totalJWTHits, timeToExpire: timeToExpireJWT } = await this.storageService.increment(JWTKey, requestProps.ttl, requestProps.limit, requestProps.blockDuration, requestProps.throttler.name);
-    
-      if (totalJWTHits > requestProps.limit)
-      {
+
+      if (totalJWTHits > requestProps.limit) {
         res.header('Retry-After', timeToExpireJWT);
 
         res.type('text/plain');
@@ -52,8 +49,7 @@ export class RateLimitingGuard extends ThrottlerGuard {
         //this.throwThrottlingException(requestProps.context,  {ttl:requestProps.ttl, limit:requestProps.limit, key:JWTKey, tracker: JWTtracker, totalHits: totalJWTHits, timeToExpire: timeToExpireJWT, isBlocked:true, timeToBlockExpire:timeToExpireJWT });
       }
     }
-    if (totalHits > requestProps.limit)
-    {
+    if (totalHits > requestProps.limit) {
       //console.log(totalHits)
       res.header('Retry-After', timeToExpire);
 

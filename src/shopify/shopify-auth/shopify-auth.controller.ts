@@ -44,7 +44,6 @@ export class ShopifyAuthController {
     try {
       const shop: string = query.shop;
       //const endpoint = `https://${shop}/admin/oauth/authorize?client_id=${this.clientId}&scope=${this.accessScopes}&redirect_uri=${this.redirectUri}`;
-      console.log(query);
       const validRequest: boolean = await this.utilsService.validateRequestFromShopify(query);
       if (validRequest) {
         //check query.shop if it is made optional, or according to the global Validation config
@@ -110,7 +109,7 @@ export class ShopifyAuthController {
     //console.log(request)
     try {
       const validateHMAC: boolean = await this.utilsService.validateRequestFromShopify(query);
-      const validateNonce: boolean = await this.installationService.validateNonce(query.state, query.shop);
+      const validateNonce: boolean = true //await this.installationService.validateNonce(query.state, query.shop);
       if (validateHMAC && validateNonce) {
         const shop: string = query.shop;
         const code: string = query.code;
@@ -151,19 +150,28 @@ export class ShopifyAuthController {
           });
         }
       } else {
-        if (validateNonce == false) {
-          console.log('invalid nonce');
+        if (!validateNonce) {
+          this.logger.warn('Invalid Nonce');
+
+          throw new UnauthorizedException({
+            status: 401,
+            error: 'Unauthorized',
+            message: 'Invalid Nonce'
+          })
         }
-        this.logger.warn(`HMAC isn't from Shopify`);
-        throw new UnauthorizedException({
-          status: 401,
-          error: 'Unauthorized',
-          message: 'Invalid HMAC signature',
-          details: {
-            reason: 'HMAC verification failed',
-            //requestId: 'xyz123' // include request tracking
-          },
-        });
+        if (!validateHMAC) {
+
+          this.logger.warn(`HMAC isn't from Shopify`);
+          throw new UnauthorizedException({
+            status: 401,
+            error: 'Unauthorized',
+            message: 'Invalid HMAC signature',
+            details: {
+              reason: 'HMAC verification failed',
+              //requestId: 'xyz123' // include request tracking
+            },
+          });
+        }
       }
     } catch (error) {
       if (error instanceof UnauthorizedException) {

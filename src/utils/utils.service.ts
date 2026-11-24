@@ -1,11 +1,11 @@
-import { ShopifyRequestOptions } from 'src/utils/types/ShopifyRequestOptions';
+import { ShopifyHeaders, ShopifyRequestOptions } from 'src/utils/types/ShopifyRequestOptions';
 import { ResponseBodyType, ShopifyResponse } from 'src/utils/types/ShopifyResponse';
 
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
-import { ExceptionFilter, Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import axios, { AxiosHeaders, AxiosRequestConfig, AxiosResponse, Method, ResponseType } from 'axios';
+import { AxiosHeaders, AxiosRequestConfig, AxiosResponse, Method, ResponseType } from 'axios';
 import { Store } from 'src/database/entities/store.entity';
 import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -13,6 +13,7 @@ import { CsrfProvider } from './providers/csrf.provider';
 import { Request, Response } from 'express';
 import { GetInstallCodeDto } from 'src/shopify/shopify-auth/dtos/get-code-query.dto';
 import { GetInstallInitQueryDto } from 'src/shopify/shopify-auth/dtos/get-install-query.dto';
+import * as crypto from 'crypto';
 
 /**
  * Here all the utility functions are defined. These are used throughout the app.
@@ -36,13 +37,9 @@ export class UtilsService {
   };
 
   public getStoreByDomain = async (shop: string): Promise<Store> => {
-    //console.log(shop);
-    console.log(shop);
     const existingStore = await this.storeRepository.findOneBy({
       myshopify_domain: shop,
     });
-    //console.log(existingStore);
-    console.log('yes');
     return existingStore;
   };
   public getAllStoresByDomain = async (shop: string): Promise<Store[]> => {
@@ -62,32 +59,52 @@ export class UtilsService {
       : `https://${store.myshopify_domain}/admin/api/${shopifyApiVersion}/${endpoint}`;
   }
 
-  public validateRequestFromShopify = async (request: GetInstallCodeDto | GetInstallInitQueryDto): Promise<boolean> => {
+  /**
+   * Verifies the `hmac` query parameter of an incoming Shopify request.
+   *
+   * Per Shopify's documentation the HMAC is computed over the remaining query
+   * parameters, sorted alphabetically by key and RFC 3986 percent-encoded
+   * (`%`, `&`, `=`, `+`, and reserved characters escaped), joined with `&`.
+   * https://shopify.dev/docs/api/usage/authentication#verify-the-hmac-parameter
+   */
+  public validateRequestFromShopify = async (
+    request: GetInstallCodeDto | GetInstallInitQueryDto,
+  ): Promise<boolean> => {
     try {
-      this.logger.log(`HMAC recieved: ${request.hmac}`);
-
-      const arr: string[] = [];
       const hmac = request.hmac;
-      delete request.hmac;
-
-      for (const [key, value] of Object.entries(request)) {
-        const encodedKey = key.replace(/%/g, '%25').replace(/&/g, '%26').replace(/=/g, '%3D');
-        const encodedValue = value.replace(/%/g, '%25').replace(/&/g, '%26').replace(/=/g, '%3D');
-        arr.push(`${encodedKey}=${encodedValue}`);
+      if (!hmac) {
+        return false;
       }
-      const str = arr.join('&');
-      const crypto = require('crypto');
+      const { hmac: _dropped, ...rest } = request as unknown as Record<string, unknown>;
+
+      const entries = Object.entries(rest)
+        .filter(([, value]) => value !== undefined && value !== null)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, value]) => {
+          const encodedKey = this.encodeRFC3986(String(key));
+          const encodedValue = this.encodeRFC3986(String(value));
+          return `${encodedKey}=${encodedValue}`;
+        });
+      const str = entries.join('&');
+
       const verHmac = crypto
         .createHmac('sha256', this.configService.get('shopify_api_secret'))
         .update(str)
         .digest('hex');
-      return verHmac === hmac;
+
+      const a = Buffer.from(verHmac, 'utf8');
+      const b = Buffer.from(hmac, 'utf8');
+      return a.length === b.length && crypto.timingSafeEqual(a, b);
     } catch (error) {
-      // Use custom logging
       this.logger.error(error.message, this.validateRequestFromShopify.name);
       return false;
     }
   };
+
+  private encodeRFC3986(value: string): string {
+    return encodeURIComponent(value)
+      .replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+  }
 
   public checkIfStoreIsPrivate(store: Store): boolean {
     if (
@@ -109,19 +126,17 @@ export class UtilsService {
   public getShopifyStoreURL(endpoint: string, myshopify_domain: string): string;
   public getShopifyStoreURL(endpoint: string, store: Store): string;
   public getShopifyStoreURL(endpoint: string, domain_or_store: Store | string): string {
-
     if (this.isStore(domain_or_store)) {
-
       const store = domain_or_store;
       return this.checkIfStoreIsPrivate(store)
-        ? `https://${store.api_key}:${store.api_secret_key}@${store.myshopify_domain}/admin/api/${this.configService.get('shopify_aoi_version')}/${endpoint}`
+        ? `https://${store.api_key}:${store.api_secret_key}@${store.myshopify_domain}/admin/api/${this.configService.get('shopify_api_version')}/${endpoint}`
         : `https://${store.myshopify_domain}/admin/api/${this.configService.get('shopify_api_version')}/${endpoint}`;
     } else {
       return `https://${domain_or_store}/admin/api/${this.configService.get('shopify_api_version')}/${endpoint}`;
     }
   }
 
-  public getGraphQLHeadersForStore = (store: Store): AxiosHeaders => {
+  public getGraphQLHeadersForStore = (store: Store): ShopifyHeaders => {
     return this.checkIfStoreIsPrivate(store)
       ? new AxiosHeaders({
           'Content-Type': 'application/json',
@@ -176,7 +191,7 @@ export class UtilsService {
   public async requestToShopify<T extends ResponseBodyType>(
     method: Method,
     endpoint: string,
-    headers: AxiosHeaders,
+    headers: ShopifyHeaders,
     payload?: Record<string, any>,
   ): Promise<ShopifyResponse<T>>;
 
@@ -187,7 +202,7 @@ export class UtilsService {
   public async requestToShopify<T extends ResponseBodyType>(
     method: Method,
     endpointOrOptions: string | ShopifyRequestOptions,
-    headers?: AxiosHeaders,
+    headers?: ShopifyHeaders,
     payload?: Record<string, any>,
   ): Promise<ShopifyResponse<T>> {
     const reqResult: ShopifyResponse<T> = { status: false, respBody: null as T };

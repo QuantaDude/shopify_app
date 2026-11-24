@@ -106,8 +106,12 @@ export class CronConsumer extends WorkerHost {
               response.respBody.appByKey.installation.activeSubscriptions[0].status == 'ACCEPTED'
             ) {
               //check charge id before setting credits
-              storePlan.credits += (await this.dataService.getPlans())[storePlan.plan_id - 1].credits;
-              console.log(storePlan.credits);
+              // Look the plan up by id instead of relying on insertion order
+              const plans = await this.dataService.getPlans();
+              const plan = plans.find(pl => pl.id === storePlan.plan_id);
+              if (plan != null) {
+                storePlan.credits += plan.credits;
+              }
             }
             storePlan.status = response.respBody.appByKey.installation.activeSubscriptions[0].status;
             await this.dataService.updatePlan(storePlan);

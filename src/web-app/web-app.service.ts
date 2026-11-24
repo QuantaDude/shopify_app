@@ -31,7 +31,7 @@ export class WebAppService {
     private readonly jobsService: JobsService,
 
     private readonly dataService: DataService,
-  ) {}
+  ) { }
 
   public syncProductTypes(store: Store) {
     try {
@@ -55,7 +55,7 @@ export class WebAppService {
       user: user,
       storeId: user.store_id,
       isStorePublic: !user.store.IsPrivate(),
-      style:'',
+      style: '',
       body: '',
       messages: '',
       showSidebar: sidebar,
@@ -242,7 +242,7 @@ export class WebAppService {
         return false;
       }
       return true;
-    } catch (error) {}
+    } catch (error) { }
   };
   public getProducts = async (user: UserDto): Promise<object> => {
     let payload: object = {};
@@ -274,6 +274,7 @@ export class WebAppService {
         ...this.getBasePayload(user),
         locations: locations,
         productTypes: level_one_categories,
+        appName: "Shopify App"
       };
     } catch (error) {
       this.logger.error(error.message, this.createProductPagePayload.name);
@@ -296,7 +297,7 @@ export class WebAppService {
       //replace with a dataService function
       newUser = await this.jobsService.createMember(newMember, storeId);
     } catch (error) {
-      this.logger.error(error.message, error.stack,this.createMember.name);
+      this.logger.error(error.message, error.stack, this.createMember.name);
     }
     return newUser;
   };
@@ -321,14 +322,14 @@ export class WebAppService {
   ): Promise<boolean | { status: string; url: string }> => {
     console.log(product);
     const result = await this.jobsService.createProduct(user.store, product);
-    if (result == undefined){
+    if (result == undefined) {
       return true;
     }
-    if(result['status'] == 'AUTH_REQUIRED') {
+    if (result['status'] == 'AUTH_REQUIRED') {
       const url = await this.getOAuthURL(user.store.myshopify_domain);
       return { status: result['status'], url };
     }
-    else if(result == false){
+    else if (result == false) {
       throw Error('unexpected error');
     }
     return true;
@@ -349,13 +350,13 @@ export class WebAppService {
     }
   };
 
-  async buyPlanForStore(user: UserDto, id: number) : Promise<string> {
+  async buyPlanForStore(user: UserDto, id: number): Promise<string> {
 
     const result = await this.jobsService.buyPlan(id, user.user_id, user.store);
     if (result['status'] == 'AUTH_REQUIRED') {
       return await this.getOAuthURL(user.store.myshopify_domain);
       //console.log(url);
-     // res.redirect(url);
+      // res.redirect(url);
     }
     return result;
   }

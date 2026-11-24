@@ -11,11 +11,15 @@ const envPath = path.resolve(
   process.cwd(),
   `.env${nodeEnv == 'production' || nodeEnv == '' ? '' : '.'}${nodeEnv != 'production' ? nodeEnv : ''}`,
 );
-console.log(envPath);
 config({ path: envPath });
 
 const configObject = configuration();
-console.log(__dirname);
+
+/**
+ * Full options (globbed entities/migrations). Used by the TypeORM CLI
+ * (`npm run migration:*`) and the seed data source, which run through
+ * ts-node and therefore need the `.ts` variants in the globs.
+ */
 export const dataSourceOptions: DataSourceOptions = {
   type: configObject.database.type,
   host: configObject.database.host,
@@ -26,14 +30,20 @@ export const dataSourceOptions: DataSourceOptions = {
   entities: [path.join(__dirname, '..', 'database', 'entities', '*.entity.{ts,js}')],
   migrations: [path.join(__dirname, '..', 'database', 'migrations', '*.{ts,js}')],
   synchronize: configObject.database.synchronize,
-  //logging: configObject.database.logging === 'true',
 };
 
 // For migrations, export the DataSource directly
 const AppDataSource = new DataSource(dataSourceOptions);
 export default AppDataSource;
 
-// For App Module
+/**
+ * Options for `TypeOrmModule.forRootAsync` in the application.
+ *
+ * Entities are registered through `TypeOrmModule.forFeature` in the feature
+ * modules and picked up via `autoLoadEntities`; forcing filesystem globs here
+ * would make TypeORM `require()` raw `.ts` files, which breaks under Vitest
+ * (and duplicates what `forFeature` already registers).
+ */
 export const moduleOptions = async (configService: ConfigService): Promise<TypeOrmModuleOptions> => {
   return {
     type: configService.get<any>('database.type'),
@@ -42,10 +52,14 @@ export const moduleOptions = async (configService: ConfigService): Promise<TypeO
     username: configService.get<string>('database.username'),
     password: configService.get<string>('database.password'),
     database: configService.get<string>('database.name'),
-    entities: [path.join(__dirname, '..', 'database', 'entities', '*.entity.{ts,js}')],
 
     autoLoadEntities: configService.get<boolean>('database.autoload'),
-    migrations: [path.join(__dirname, '..', 'database', 'migrations', '*.{ts,js}')],
+    // Migration classes are only needed when `migrationsRun` is enabled.
+    // Under Vitest the glob would make TypeORM require() raw `.ts` files,
+    // so it is emptied there (the CLI keeps its own globbed config above).
+    migrations: process.env.VITEST
+      ? []
+      : [path.join(__dirname, '..', 'database', 'migrations', '*.{ts,js}')],
 
     synchronize: configService.get<boolean>('database.synchronize'),
     logging: configService.get<boolean>('database.logging') === true,

@@ -1,0 +1,842 @@
+# Curated subset of the Shopify Admin GraphQL API - version 2026-10
+# Reconstructed from the official reference pages at shopify.dev
+# (the public SDL proxy endpoint was decommissioned).
+# Covers the types used by this app's operations; extend as needed.
+# For the full schema, dump introspection from a store endpoint instead:
+#   schema: https://<shop>.myshopify.com/admin/api/2026-10/graphql.json
+
+scalar DateTime
+scalar HTML
+scalar URL
+scalar Decimal
+scalar JsonString
+scalar MoneyBigDecimal
+scalar Money
+scalar CustomerEmailMarketingConsentState
+scalar CustomerSmsMarketingConsentState
+scalar UnsignedInt64
+
+enum CurrencyCode { USD }
+enum AppRecurringPricingInterval { DAY MONTH YEAR }
+enum WebhookSubscriptionFormat { JSON }
+enum ProductStatus { ACTIVE ARCHIVED DRAFT }
+enum FulfillmentStatus { CANCELLED ERROR FAILURE OPEN PENDING SUCCESS }
+enum AppSubscriptionStatus { ACCEPTED ACTIVE CANCELLED DECLINED EXPIRED PENDING }
+enum OrderCancelReason { CUSTOMER DECLINED FRAUD INVENTORY OTHER }
+enum OrderDisplayFinancialStatus { AUTHORIZED PAID PARTIALLY_PAID PENDING REFUNDED VOIDED }
+enum FulfillmentDisplayStatus { BEFORE ATTEMPTING_DELIVERY CONFIRMED DELIVERED FAILURE FULFILLED IN_TRANSIT LABEL_PRINTED READY_FOR_PICKUP SCHEDULED SUBMITTED UNFULFILLED }
+# CountryCode is truncated here to a representative subset; the field
+# is only selected as a leaf by this app's documents.
+enum CountryCode { AD AE AG AI AL AM AO AR AT AU AW AZ BB BE BF BG BH BI BJ BL BM BN BO BR BS BT BW BY BZ CA CD CG CH CI CL CM CN CO CR CU CV CW CY CZ DE DJ DK DM DO DZ EC EE EG ER ES ET FI FJ FM FO FR GA GD GE GF GG GH GI GL GM GN GP GQ GR GT GU GW GY HK HN HR HT HU ID IE IL IM IN IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MG MH MK ML MM MN MO MQ MR MT MU MV MW MX MY MZ NA NC NE NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PR PS PT PW PY QA RE RO RS RU RW SA SB SC SE SG SI SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TG TH TJ TL TM TN TO TR TT TV TW TZ UA UG US UY UZ VA VC VE VG VI VN VU WS XI YE ZA ZM ZW }
+enum WebhookSubscriptionTopic {
+  APP_UNINSTALLED
+  APP_SUBSCRIPTIONS_UPDATE
+  CUSTOMERS_CREATE
+  ORDERS_CREATE
+  ORDERS_UPDATED
+  PRODUCTS_CREATE
+  PRODUCTS_DELETE
+  PRODUCTS_UPDATE
+  SHOP_UPDATE
+  SUBSCRIPTION_BILLING_ATTEMPTS_SUCCESS
+}
+
+type MoneyV2 { amount: Decimal! currencyCode: CurrencyCode! }
+type Count { count: Int! }
+type PageInfo { hasNextPage: Boolean! hasPreviousPage: Boolean! startCursor: String endCursor: String }
+type Image { id: ID! altText: String url: URL! width: Int height: Int }
+type TaxLine { channelLiable: Boolean priceSet: MoneyBag! rate: Float ratePercentage: Float title: String! }
+type MoneyBag { shopMoney: MoneyV2! presentmentMoney: MoneyV2! }
+type AppPricingPrice { amount: Decimal! currencyCode: CurrencyCode! }
+type ProductOptionValue { id: ID! name: String! hasVariants: Boolean! }
+type SelectedOption { name: String! value: String! }
+type ProductPriceRangeV2 { minVariantPrice: MoneyV2! maxVariantPrice: MoneyV2! }
+type ProductCompareAtPriceRange { minVariantCompareAtPrice: MoneyV2! maxVariantCompareAtPrice: MoneyV2! }
+type FulfillmentTrackingInfo { company: String number: String url: URL }
+
+interface AppPricingDetails { interval: AppRecurringPricingInterval! }
+type AppRecurringPricing implements AppPricingDetails { interval: AppRecurringPricingInterval! price: AppPricingPrice! }
+type AppUsagePricing implements AppPricingDetails { interval: AppRecurringPricingInterval! cappedAmount: Decimal! }
+
+type Product {
+  availablePublicationsCount: Count
+  category: TaxonomyCategory
+  compareAtPriceRange: ProductCompareAtPriceRange
+  createdAt: DateTime!
+  defaultCursor: String!
+  description: String!
+  descriptionHtml: HTML!
+  giftCardTemplateSuffix: String
+  handle: String!
+  hasOnlyDefaultVariant: Boolean!
+  hasOutOfStockVariants: Boolean!
+  hasVariantsThatRequiresComponents: Boolean!
+  id: ID!
+  inCollection: Boolean!
+  isGiftCard: Boolean!
+  legacyResourceId: UnsignedInt64!
+  mediaCount: Count
+  metafield: Metafield
+  metafields: MetafieldConnection!
+  onlineStorePreviewUrl: URL
+  onlineStoreUrl: URL
+  options: [ProductOption!]!
+  priceRangeV2: ProductPriceRangeV2!
+  productComponentsCount: Count
+  productParents: ProductConnection!
+  productType: String!
+  publishedAt: DateTime
+  publishedInContext: Boolean!
+  publishedOnPublication: Boolean!
+  requiresSellingPlan: Boolean!
+  resourcePublicationsCount: Count
+  sellingPlanGroupsCount: Count
+  status: ProductStatus!
+  tags: [String!]!
+  templateSuffix: String
+  title: String!
+  totalInventory: Int!
+  tracksInventory: Boolean!
+  updatedAt: DateTime!
+  variants(first: Int, after: String, last: Int, before: String, query: String): ProductVariantConnection!
+  variantsCount: Count
+  variantsInCollection: ProductVariantConnection
+  variantsInCollectionCount: Count
+  vendor: String!
+  bodyHtml: String
+  customProductType: String
+  descriptionPlainSummary: String!
+  featuredImage: Image
+  productCategory: ProductCategory
+  publicationCount: Int!
+  publishedOnChannel: Boolean!
+  publishedOnCurrentChannel: Boolean!
+  publishedOnCurrentPublication: Boolean!
+  sellingPlanGroupCount: Int!
+  totalVariants: Int!
+  productByHandle: Product
+}
+
+type ProductOption {
+  createdAt: DateTime!
+  id: ID!
+  name: String!
+  optionValues: [ProductOptionValue!]!
+  position: Int!
+  values: [String!]!
+}
+
+type ProductVariant {
+  availableForSale: Boolean!
+  availablePublicationsCount: Count
+  compareAtPrice: Money
+  createdAt: DateTime!
+  defaultCursor: String!
+  displayName: String!
+  id: ID!
+  inventoryItem: InventoryItem!
+  inventoryQuantity: Int
+  legacyResourceId: UnsignedInt64!
+  metafield: Metafield
+  metafields: MetafieldConnection!
+  position: Int!
+  price: Money!
+  product: Product!
+  productParents: ProductConnection!
+  publishedOnPublication: Boolean!
+  requiresComponents: Boolean!
+  resourcePublicationsCount: Count
+  selectedOptions: [SelectedOption!]!
+  sellableOnlineQuantity: Int!
+  sellingPlanGroupsCount: Count
+  showUnitPrice: Boolean!
+  sku: String
+  taxable: Boolean!
+  title: String!
+  unitPrice: MoneyV2
+  updatedAt: DateTime!
+  barcode: String
+  image: Image
+  publicationCount: Int!
+  publishedOnChannel: Boolean!
+  publishedOnCurrentChannel: Boolean!
+  publishedOnCurrentPublication: Boolean!
+  sellingPlanGroupCount: Int!
+  taxCode: String
+}
+
+type InventoryItem {
+  countryCodeOfOrigin: CountryCode
+  createdAt: DateTime!
+  duplicateSkuCount: Int!
+  harmonizedSystemCode: String
+  id: ID!
+  inventoryHistoryUrl: URL
+  inventoryLevel: InventoryLevel
+  inventoryLevels(first: Int, after: String, last: Int, before: String): InventoryLevelConnection!
+  legacyResourceId: UnsignedInt64!
+  locationsCount: Count
+  provinceCodeOfOrigin: String
+  requiresShipping: Boolean!
+  sku: String
+  tracked: Boolean!
+  unitCost: MoneyV2
+  updatedAt: DateTime!
+  variants: ProductVariantConnection
+  variant: ProductVariant!
+}
+
+type Order {
+  billingAddress: MailingAddress
+  billingAddressMatchesShippingAddress: Boolean!
+  cancelledAt: DateTime
+  cancelReason: OrderCancelReason
+  canMarkAsPaid: Boolean!
+  canNotifyCustomer: Boolean!
+  capturable: Boolean!
+  cartDiscountAmountSet: MoneyBag
+  cartToken: String
+  checkoutToken: String
+  clientIp: String
+  closed: Boolean!
+  closedAt: DateTime
+  confirmationNumber: String
+  confirmed: Boolean!
+  createdAt: DateTime!
+  currencyCode: CurrencyCode!
+  currentCartDiscountAmountSet: MoneyBag!
+  currentShippingPriceSet: MoneyBag!
+  currentSubtotalLineItemsQuantity: Int!
+  currentSubtotalPriceSet: MoneyBag!
+  currentTaxLines: [TaxLine!]!
+  currentTotalAdditionalFeesSet: MoneyBag
+  currentTotalDiscountsSet: MoneyBag!
+  currentTotalDutiesSet: MoneyBag
+  currentTotalPriceSet: MoneyBag!
+  currentTotalTaxSet: MoneyBag!
+  currentTotalWeight: UnsignedInt64!
+  customer: Customer
+  customerAcceptsMarketing: Boolean!
+  customerLocale: String
+  discountCode: String
+  discountCodes: [String!]!
+  displayAddress: MailingAddress
+  displayFinancialStatus: OrderDisplayFinancialStatus
+  dutiesIncluded: Boolean!
+  edited: Boolean!
+  email: String
+  estimatedTaxes: Boolean!
+  fulfillable: Boolean!
+  fulfillments: [Fulfillment!]!
+  fulfillmentsCount: Count
+  fullyPaid: Boolean!
+  hasTimelineComment: Boolean!
+  id: ID!
+  legacyResourceId: UnsignedInt64!
+  lineItems(first: Int, after: String, last: Int, before: String, query: String): LineItemConnection!
+  merchantEditable: Boolean!
+  merchantEditableErrors: [String!]!
+  metafield: Metafield
+  metafields: MetafieldConnection!
+  name: String!
+  netPaymentSet: MoneyBag!
+  nonFulfillableLineItems: LineItemConnection!
+  note: String
+  number: Int!
+  originalTotalAdditionalFeesSet: MoneyBag
+  originalTotalDutiesSet: MoneyBag
+  originalTotalPriceSet: MoneyBag!
+  paymentGatewayNames: [String!]!
+  phone: String
+  poNumber: String
+  presentmentCurrencyCode: CurrencyCode!
+  processedAt: DateTime!
+  productNetwork: Boolean!
+  refundable: Boolean!
+  refundDiscrepancySet: MoneyBag!
+  registeredSourceUrl: URL
+  requiresShipping: Boolean!
+  restockable: Boolean!
+  retailLocation: Location
+  shippingAddress: MailingAddress
+  shippingLine: ShippingLine
+  sourceIdentifier: String
+  sourceName: String
+  statusPageUrl: URL!
+  subtotalLineItemsQuantity: Int!
+  subtotalPriceSet: MoneyBag
+  tags: [String!]!
+  taxesIncluded: Boolean!
+  taxExempt: Boolean!
+  taxLines: [TaxLine!]!
+  test: Boolean!
+  totalCapturableSet: MoneyBag!
+  totalDiscountsSet: MoneyBag
+  totalOutstandingSet: MoneyBag!
+  totalPriceSet: MoneyBag!
+  totalReceivedSet: MoneyBag!
+  totalRefundedSet: MoneyBag!
+  totalRefundedShippingSet: MoneyBag!
+  totalShippingPriceSet: MoneyBag!
+  totalTaxSet: MoneyBag
+  totalTipReceivedSet: MoneyBag!
+  totalWeight: UnsignedInt64
+  transactionsCount: Count
+  unpaid: Boolean!
+  updatedAt: DateTime!
+  cartDiscountAmount: Money
+  landingPageDisplayText: String
+  landingPageUrl: URL
+  netPayment: Money!
+  physicalLocation: Location
+  referralCode: String
+  referrerDisplayText: String
+  referrerUrl: URL
+  subtotalPrice: Money
+  totalCapturable: Money!
+  totalDiscounts: Money
+  totalPrice: Money!
+  totalReceived: Money!
+  totalRefunded: Money!
+  totalShippingPrice: Money!
+  totalTax: Money
+  totalTipReceived: MoneyV2!
+}
+
+type LineItem {
+  createdAt: DateTime!
+  currentQuantity: Int!
+  discountedTotalSet: MoneyBag!
+  discountedUnitPriceAfterAllDiscountsSet: MoneyBag!
+  discountedUnitPriceSet: MoneyBag!
+  id: ID!
+  image: Image
+  isGiftCard: Boolean!
+  merchantEditable: Boolean!
+  name: String!
+  nonFulfillableQuantity: Int!
+  originalTotalSet: MoneyBag!
+  originalUnitPriceSet: MoneyBag!
+  priceAfterAllDiscountsBeforeTaxesSet: MoneyBag!
+  product: Product
+  quantity: Int!
+  refundableQuantity: Int!
+  requiresShipping: Boolean!
+  restockable: Boolean!
+  sku: String
+  taxable: Boolean!
+  taxLines: [TaxLine!]!
+  title: String!
+  totalDiscountSet: MoneyBag!
+  unfulfilledDiscountedTotalSet: MoneyBag!
+  unfulfilledOriginalTotalSet: MoneyBag!
+  unfulfilledQuantity: Int!
+  variant: ProductVariant
+  variantTitle: String
+  vendor: String
+  canRestock: Boolean!
+  discountedTotal: Money!
+  discountedUnitPrice: Money!
+  fulfillableQuantity: Int!
+  fulfillmentStatus: String!
+  originalTotal: Money!
+  originalUnitPrice: Money!
+  totalDiscount: Money!
+  unfulfilledDiscountedTotal: Money!
+  unfulfilledOriginalTotal: Money!
+}
+
+type Fulfillment {
+  createdAt: DateTime!
+  deliveredAt: DateTime
+  displayStatus: FulfillmentDisplayStatus
+  estimatedDeliveryAt: DateTime
+  id: ID!
+  inTransitAt: DateTime
+  legacyResourceId: UnsignedInt64!
+  location: Location
+  name: String!
+  order: Order!
+  requiresShipping: Boolean!
+  status: FulfillmentStatus!
+  totalQuantity: Int!
+  trackingInfo: [FulfillmentTrackingInfo!]!
+  updatedAt: DateTime!
+}
+
+type ShippingLine {
+  carrierIdentifier: String
+  code: String
+  createdAt: DateTime!
+  currentDiscountedPriceSet: MoneyBag!
+  custom: Boolean!
+  deliveryCategory: String
+  discountedPriceSet: MoneyBag!
+  id: ID
+  isRemoved: Boolean!
+  originalPriceSet: MoneyBag!
+  phone: String
+  shippingRateHandle: String
+  source: String
+  taxLines: [TaxLine!]!
+  title: String!
+  discountedPrice: MoneyV2!
+  originalPrice: MoneyV2!
+  price: Money!
+}
+
+type MailingAddress {
+  address1: String
+  address2: String
+  city: String
+  company: String
+  coordinatesValidated: Boolean!
+  country: String
+  countryCodeV2: CountryCode
+  firstName: String
+  formatted: [String!]!
+  formattedArea: String
+  id: ID!
+  lastName: String
+  latitude: Float
+  longitude: Float
+  name: String
+  phone: String
+  province: String
+  provinceCode: String
+  timeZone: String
+  zip: String
+  countryCode: String
+}
+
+type Customer {
+  amountSpent: MoneyV2!
+  canDelete: Boolean!
+  createdAt: DateTime!
+  dataSaleOptOut: Boolean!
+  defaultAddress: MailingAddress
+  displayName: String!
+  firstName: String
+  id: ID!
+  image: Image!
+  lastName: String
+  lastOrder: Order
+  legacyResourceId: UnsignedInt64!
+  lifetimeDuration: String!
+  locale: String!
+  metafield: Metafield
+  metafields(first: Int, after: String): MetafieldConnection!
+  multipassIdentifier: String
+  note: String
+  numberOfOrders: UnsignedInt64!
+  orders: OrderConnection!
+  tags: [String!]!
+  taxExempt: Boolean!
+  updatedAt: DateTime!
+  verifiedEmail: Boolean!
+  addresses(first: Int): [MailingAddress!]!
+  email: String
+  emailMarketingConsent: CustomerEmailMarketingConsentState
+  hasTimelineComment: Boolean!
+  phone: String
+  smsMarketingConsent: CustomerSmsMarketingConsentState
+  unsubscribeUrl: URL!
+  validEmailAddress: Boolean!
+}
+
+type Metafield {
+  compareDigest: String!
+  createdAt: DateTime!
+  id: ID!
+  key: String!
+  legacyResourceId: UnsignedInt64!
+  namespace: String!
+  sizeInBytes: Int!
+  translatable: Boolean!
+  type: String!
+  updatedAt: DateTime!
+  value: String!
+  description: String
+}
+
+type Shop {
+  allProductCategoriesList: [TaxonomyCategory!]!
+  checkoutApiSupported: Boolean!
+  contactEmail: String!
+  createdAt: DateTime!
+  currencyCode: CurrencyCode!
+  description: String
+  email: String!
+  enabledPresentmentCurrencies: [CurrencyCode!]!
+  ianaTimezone: String!
+  id: ID!
+  marketingSmsConsentEnabledAtCheckout: Boolean!
+  metafield: Metafield
+  metafields: MetafieldConnection!
+  myshopifyDomain: String!
+  name: String!
+  orderNumberFormatPrefix: String!
+  orderNumberFormatSuffix: String!
+  richTextEditorUrl: URL!
+  setupRequired: Boolean!
+  shipsToCountries: [CountryCode!]!
+  shopAddress: ShopAddress!
+  shopOwnerName: String!
+  taxesIncluded: Boolean!
+  taxShipping: Boolean!
+  timezoneAbbreviation: String!
+  timezoneOffset: String!
+  timezoneOffsetMinutes: Int!
+  transactionalSmsDisabled: Boolean!
+  updatedAt: DateTime!
+  url: URL!
+  allProductCategories: [ProductCategory!]!
+  analyticsToken: String!
+  billingAddress: ShopAddress!
+  customers: CustomerConnection!
+  locations: LocationConnection!
+  orders: OrderConnection!
+  products: ProductConnection!
+  productVariants: ProductVariantConnection!
+  publicationCount: Int!
+  storefrontUrl: URL!
+}
+
+type ShopAddress {
+  address1: String
+  address2: String
+  city: String
+  company: String
+  coordinatesValidated: Boolean!
+  country: String
+  countryCodeV2: CountryCode
+  formatted: [String!]!
+  formattedArea: String
+  id: ID!
+  latitude: Float
+  longitude: Float
+  phone: String
+  province: String
+  provinceCode: String
+  zip: String
+  countryCode: String
+  firstName: String
+  lastName: String
+  name: String
+}
+
+type ProductCategory {
+  productTaxonomyNode: ProductTaxonomyNode
+}
+
+type ProductTaxonomyNode {
+  fullName: String!
+  id: ID!
+  isLeaf: Boolean!
+  isRoot: Boolean!
+  name: String!
+}
+
+type TaxonomyCategory {
+  ancestorIds: [ID!]!
+  childrenIds: [ID!]!
+  fullName: String!
+  id: ID!
+  isArchived: Boolean!
+  isLeaf: Boolean!
+  isRoot: Boolean!
+  level: Int!
+  name: String!
+  parentId: ID
+}
+
+type Taxonomy {
+  categories(first: Int, after: String, last: Int, before: String, childrenOf: ID): TaxonomyCategoryConnection!
+  taxonomy: Taxonomy
+}
+
+type App {
+  apiKey: String!
+  appStoreAppUrl: URL
+  appStoreDeveloperUrl: URL
+  banner: Image!
+  description: String
+  developerName: String
+  embedded: Boolean!
+  features: [String!]!
+  handle: String
+  icon: Image!
+  id: ID!
+  installation: AppInstallation
+  installUrl: URL
+  isPostPurchaseAppInUse: Boolean!
+  previouslyInstalled: Boolean!
+  pricingDetails: String
+  pricingDetailsSummary: String!
+  privacyPolicyUrl: URL
+  published: Boolean!
+  screenshots: [Image!]!
+  shopifyDeveloped: Boolean!
+  title: String!
+  uninstallMessage: String!
+  webhookApiVersion: String!
+  developerUrl: URL!
+  launchUrl: URL!
+  uninstallUrl: URL
+}
+
+type AppInstallation {
+  activeSubscriptions: [AppSubscription!]!
+  app: App!
+  id: ID!
+  launchUrl: URL!
+  metafield: Metafield
+  metafields: MetafieldConnection!
+  uninstallUrl: URL
+  subscriptions: [AppSubscription!]!
+}
+
+type AppSubscription {
+  createdAt: DateTime!
+  currentPeriodEnd: DateTime
+  id: ID!
+  lineItems: [AppSubscriptionLineItem!]!
+  name: String!
+  returnUrl: URL!
+  status: AppSubscriptionStatus!
+  test: Boolean!
+  trialDays: Int!
+}
+
+type AppSubscriptionLineItem {
+  id: ID!
+  plan: AppPlanV2!
+}
+
+type AppPlanV2 {
+  pricingDetails: AppPricingDetails!
+}
+
+type WebhookSubscription {
+  createdAt: DateTime!
+  filter: String
+  format: WebhookSubscriptionFormat!
+  id: ID!
+  includeFields: [String!]!
+  legacyResourceId: UnsignedInt64!
+  metafieldNamespaces: [String!]!
+  name: String
+  topic: WebhookSubscriptionTopic!
+  updatedAt: DateTime!
+  uri: String!
+  callbackUrl: URL!
+}
+
+type InventoryQuantity {
+  id: ID!
+  name: String!
+  quantity: Int!
+  updatedAt: DateTime
+}
+
+type InventoryLevel {
+  canDeactivate: Boolean!
+  createdAt: DateTime!
+  deactivationAlert: String
+  id: ID!
+  isActive: Boolean!
+  item: InventoryItem!
+  location: Location!
+  quantities(names: [String!]): [InventoryQuantity!]!
+  updatedAt: DateTime!
+}
+
+type Location {
+  activatable: Boolean!
+  addressVerified: Boolean!
+  createdAt: DateTime!
+  deactivatable: Boolean!
+  deactivatedAt: String
+  deletable: Boolean!
+  fulfillsOnlineOrders: Boolean!
+  hasActiveInventory: Boolean!
+  hasUnfulfilledOrders: Boolean!
+  id: ID!
+  inventoryLevel: InventoryLevel
+  inventoryLevels: InventoryLevelConnection!
+  isActive: Boolean!
+  isFulfillmentService: Boolean!
+  legacyResourceId: UnsignedInt64!
+  metafield: Metafield
+  metafields: MetafieldConnection!
+  name: String!
+  shipsInventory: Boolean!
+  updatedAt: DateTime!
+  isPrimary: Boolean!
+  locationsAvailableForDeliveryProfiles: [Location!]
+}
+
+input ProductCreateInput {
+  category: ID
+  collectionsToJoin: [ID!]
+  descriptionHtml: String
+  giftCard: Boolean
+  giftCardTemplateSuffix: String
+  handle: String
+  productType: String
+  requiresSellingPlan: Boolean
+  status: ProductStatus
+  tags: [String!]
+  templateSuffix: String
+  title: String
+  vendor: String
+}
+
+input ProductVariantsBulkInput {
+  compareAtPrice: Money
+  id: ID
+  inventoryItem: InventoryItemInput
+  inventoryQuantities: [InventoryLevelInput!]
+  mediaId: ID
+  mediaSrc: [String!]
+  optionValues: [VariantOptionValueInput!]
+  price: Money
+  published: Boolean
+  requiresComponents: Boolean
+  showUnitPrice: Boolean
+  taxable: Boolean
+  taxCode: String
+  barcode: String
+}
+
+input VariantOptionValueInput {
+  id: ID
+  linkedMetafieldValue: String
+  name: String
+  optionId: ID
+  optionName: String
+}
+
+input InventoryLevelInput {
+  availableQuantity: Int!
+  locationId: ID!
+}
+
+input InventoryItemInput {
+  cost: Decimal
+  countryCodeOfOrigin: CountryCode
+  harmonizedSystemCode: String
+  provinceCodeOfOrigin: String
+  requiresShipping: Boolean
+  sku: String
+  tracked: Boolean
+}
+
+input AppSubscriptionLineItemInput {
+  plan: AppPlanInput!
+}
+
+input AppPlanInput {
+  appRecurringPricingDetails: AppRecurringPricingInput
+}
+
+input AppRecurringPricingInput {
+  price: MoneyInput!
+}
+
+input MoneyInput {
+  amount: Decimal!
+  currencyCode: CurrencyCode!
+}
+
+input WebhookSubscriptionInput {
+  filter: String
+  format: WebhookSubscriptionFormat
+  includeFields: [String!]
+  metafieldNamespaces: [String!]
+  name: String
+  uri: String
+  callbackUrl: URL
+}
+
+type ProductEdge { cursor: String! node: Product! }
+type ProductConnection {
+  edges: [ProductEdge!]!
+  pageInfo: PageInfo!
+}
+
+type ProductVariantEdge { cursor: String! node: ProductVariant! }
+type ProductVariantConnection {
+  edges: [ProductVariantEdge!]!
+  pageInfo: PageInfo!
+}
+
+type TaxonomyCategoryEdge { cursor: String! node: TaxonomyCategory! }
+type TaxonomyCategoryConnection {
+  edges: [TaxonomyCategoryEdge!]!
+  nodes: [TaxonomyCategory!]!
+  pageInfo: PageInfo!
+}
+
+type OrderEdge { cursor: String! node: Order! }
+type OrderConnection {
+  edges: [OrderEdge!]!
+  pageInfo: PageInfo!
+}
+
+type LineItemEdge { cursor: String! node: LineItem! }
+type LineItemConnection {
+  edges: [LineItemEdge!]!
+  nodes: [LineItem!]!
+  pageInfo: PageInfo!
+}
+
+type CustomerEdge { cursor: String! node: Customer! }
+type CustomerConnection {
+  edges: [CustomerEdge!]!
+  pageInfo: PageInfo!
+}
+
+type MetafieldEdge { cursor: String! node: Metafield! }
+type MetafieldConnection {
+  edges: [MetafieldEdge!]!
+  pageInfo: PageInfo!
+}
+
+type InventoryLevelEdge { cursor: String! node: InventoryLevel! }
+type InventoryLevelConnection {
+  edges: [InventoryLevelEdge!]!
+  pageInfo: PageInfo!
+}
+
+type LocationEdge { cursor: String! node: Location! }
+type LocationConnection {
+  edges: [LocationEdge!]!
+  pageInfo: PageInfo!
+}
+
+type QueryRoot {
+  shop: Shop!
+  products(after: String, before: String, first: Int, last: Int, query: String): ProductConnection!
+  orders(after: String, before: String, first: Int, last: Int, query: String): OrderConnection!
+  customers(after: String, before: String, first: Int, last: Int, query: String): CustomerConnection!
+  taxonomy: Taxonomy!
+  appByKey(apiKey: String!): App
+  locations(first: Int, after: String, last: Int, before: String, includeInactive: Boolean, includeLegacy: Boolean, query: String, reverse: Boolean): LocationConnection!
+}
+
+type MutationRoot {
+  appSubscriptionCreate(lineItems: [AppSubscriptionLineItemInput!]!, name: String!, returnUrl: URL!, test: Boolean, trialDays: Int): AppSubscriptionCreatePayload!
+  productCreate(product: ProductCreateInput): ProductCreatePayload!
+  productVariantsBulkCreate(productId: ID!, variants: [ProductVariantsBulkInput!]!): ProductVariantsBulkCreatePayload!
+  webhookSubscriptionCreate(topic: WebhookSubscriptionTopic!, webhookSubscription: WebhookSubscriptionInput!): WebhookSubscriptionCreatePayload!
+}
+
+type UserError { field: [String!]! message: String! }
+type AppSubscriptionCreatePayload { appSubscription: AppSubscription confirmationUrl: URL userErrors: [UserError!]! }
+type ProductCreatePayload { product: Product userErrors: [UserError!]! }
+type ProductVariantsBulkCreatePayload { productVariants: [ProductVariant!]! userErrors: [UserError!]! }
+type WebhookSubscriptionCreatePayload { webhookSubscription: WebhookSubscription userErrors: [UserError!]! }
+
+schema { query: QueryRoot mutation: MutationRoot }
+

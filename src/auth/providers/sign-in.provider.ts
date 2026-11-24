@@ -27,7 +27,7 @@ export class SignInProvider {
 
     @Inject(jwtConfiguration.KEY)
     private readonly jwtConfig: ConfigType<typeof jwtConfiguration>,
-  ) {}
+  ) { }
 
   public signIn = async (signInDto: SignInDto): Promise<string> => {
     const {
@@ -48,7 +48,8 @@ export class SignInProvider {
       throw new UnauthorizedException('Incorrect Password');
     }
 
-    //console.log(userDetails.User.user_id)
+    console.log(user_id, password, email)
+    console.log(this.jwtConfig)
     return await this.jwtService.signAsync(
       {
         sub: user_id,
