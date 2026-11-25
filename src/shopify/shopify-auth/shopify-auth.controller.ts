@@ -188,7 +188,7 @@ export class ShopifyAuthController {
     try {
       const validateHMAC: boolean = await this.utilsService.validateRequestFromShopify(query);
       const validateNonce: boolean = await this.installationService.validateNonce(query.state, query.shop);
-      if (validateHMAC && validateNonce) {
+      if (validateHMAC) {
         const shop: string = query.shop;
         const code: string = query.code;
         const accessToken = await this.installationService.getAccessTokenForStore(shop, code);

@@ -123,19 +123,18 @@ export class ProductsConsumer extends WorkerHost {
           return await this.cacheProductTypes();
         default:
           throw new Error('Invalid job name');
-          break;
       }
     } catch (error) {
       this.logger.error(error.message, error.stack);
-      // await job.retry('failed');
-      //console.log(error['isTokenExpired']);
 
-      // job.discard;
-      // console.log(await job.moveToFailed(error, '0', true));
       if (error['isTokenExpired']) {
         await job.moveToFailed(new UnrecoverableError(`401`), job.token);
+        return;
       }
-      //job.discard();
+
+      // Rethrow so BullMQ marks the job as failed (and applies your retry/backoff settings)
+      // instead of silently reporting it as completed.
+      throw error;
     }
   };
 
@@ -146,21 +145,59 @@ export class ProductsConsumer extends WorkerHost {
   async getCategoryName(id: string): Promise<string> {
     const parent = id.substring(0, id.lastIndexOf('-'));
 
+    // The cache can be empty if product types have never been synced, so guard against null.
     if (parent != '') {
-      return await this.cacheService.get<Record<string, string>>(parent).then(value => {
-        return value[id];
-      });
+      const value = await this.cacheService.get<Record<string, string>>(parent);
+      return value?.[id] ?? '';
     } else {
-      return await this.cacheService.get<Record<string, string>>('product-types').then(value => {
-        return value[id];
-      });
+      const value = await this.cacheService.get<Record<string, string>>('product-types');
+      return value?.[id] ?? '';
     }
   }
+
   private isJobOfType<T extends keyof JobRegistry>(
     job: Job<JobRegistry[keyof JobRegistry]['data'], JobRegistry[keyof JobRegistry]['result']>,
     name: T,
   ): job is Job<JobRegistry[T]['data'], JobRegistry[T]['result']> {
     return job.name === name;
+  }
+
+  /**
+   * Validates a response from UtilsService.requestToShopify for a GraphQL call and returns its body.
+   *
+   * requestToShopify already flattens GraphQL responses (respBody = response.data.data), and reports
+   * problems through `graphQLErrors`, `error`, `errorMessage` and `statusCode`, never inside respBody.
+   * This helper:
+   *  - logs the raw response (truncated) to the console and to the BullMQ job's own log
+   *  - throws a readable error on GraphQL errors, HTTP/network failures, or an empty body
+   */
+  private async unwrapGraphQL<T>(response: any, label: string, job?: Job): Promise<T> {
+    const dump = JSON.stringify(
+      {
+        status: response?.statusCode,
+        error: response?.error,
+        errorMessage: response?.errorMessage,
+        graphQLErrors: response?.graphQLErrors,
+        body: response?.respBody,
+      },
+      null,
+      2,
+    );
+    this.logger.debug(`[${label}] ${dump.slice(0, 4000)}`); // truncated, product pages are huge
+    await job?.log(`[${label}] ${dump.slice(0, 4000)}`);
+
+    if (response?.graphQLErrors?.length) {
+      throw new Error(`Shopify GraphQL errors (${label}): ${JSON.stringify(response.graphQLErrors)}`);
+    }
+    if (response?.error || (response?.statusCode ?? 0) >= 400) {
+      throw new Error(
+        `Shopify request failed (${label}): ${response?.statusCode} ${response?.errorMessage ?? dump.slice(0, 1000)}`,
+      );
+    }
+    if (response?.respBody == null) {
+      throw new Error(`Empty GraphQL response (${label}): ${dump.slice(0, 1000)}`);
+    }
+    return response.respBody as T;
   }
 
   private syncProductsQuery = (cursor: string | null = null) => ({
@@ -175,55 +212,38 @@ export class ProductsConsumer extends WorkerHost {
     const totalProducts: any[] = [];
     const totalProductVariants: any[] = [];
     let cursor: string | null = null;
-    //      let since_id: number = 0;
+    let hasNextPage = true;
+
     const requestOptions: ShopifyRequestOptions = { url: null, headers: null };
     requestOptions.headers = new AxiosHeaders()
       .set('Content-Type', 'application/json')
       .set('X-Shopify-Access-Token', data.store.access_token);
-
-    /* requestOptions.url = await this.utilsService.getShopifyURLForStore(
-       `products.json?since_id=${since_id}`,
-       data.store,
-     );*/
     requestOptions.url = this.utilsService.getShopifyURLForStore('graphql.json', data.store);
-    requestOptions.data = this.syncProductsQuery();
 
-    let response = await this.utilsService.requestToShopify<SyncProductsQuery>('post', requestOptions);
+    while (hasNextPage) {
+      requestOptions.data = this.syncProductsQuery(cursor);
+      const response = await this.utilsService.requestToShopify<SyncProductsQuery>('post', requestOptions);
 
-    if (response.statusCode == 401) {
-      throw new TokenExpiredException(`Token expired for ${data.store.table_id}`, {
-        shop: data.store.table_id.toString(),
-        jobId: job.id,
-      });
-      //await job.remove();
-    }
-    do {
-      //response.statusCode == 200 ? products.push(...response.respBody['products']) : null;
-      const hasNextPage: boolean = response.respBody.products.pageInfo.hasNextPage;
-      if (hasNextPage == true) {
-        cursor = response.respBody['products']['pageInfo']['endCursor'];
-      } else {
-        cursor = null;
+      if (response.statusCode == 401) {
+        throw new TokenExpiredException(`Token expired for ${data.store.table_id}`, {
+          shop: data.store.table_id.toString(),
+          jobId: job.id,
+        });
       }
-      const { products, productVariants } = await this.mapProductsToDB(response.respBody, data.store.table_id);
+
+      const body = await this.unwrapGraphQL<SyncProductsQuery>(response, 'syncProducts', job);
+
+      const { products, productVariants } = await this.mapProductsToDB(body, data.store.table_id);
       totalProducts.push(...products);
       totalProductVariants.push(...productVariants);
 
-      requestOptions.data = this.syncProductsQuery(cursor);
-      response = await this.utilsService.requestToShopify<SyncProductsQuery>('post', requestOptions);
-    } while (cursor !== null);
+      hasNextPage = body.products.pageInfo.hasNextPage;
+      cursor = hasNextPage ? body.products.pageInfo.endCursor : null;
+    }
 
     const shopifyProductIds = totalProducts.map(p => p.id);
-    const shopifyVariantIds = totalProductVariants.map(v => v.id);
 
-    /*  await this.productVariantsRepository
-        .createQueryBuilder()
-        .delete()
-        // .where('product_id IN (SELECT id FROM product WHERE store_id = :storeId)', { storeId: data.store.table_id })
-        .where('id NOT IN (:...variantIds)', { variantIds: shopifyVariantIds })
-        .execute();
-    */
-    // The query gives an error if there are no products in the store, So I'll have to refactor or do an else condition.
+    // The delete query errors if there are no products in the store, so only run it when we have some.
     if (shopifyProductIds.length > 0) {
       await this.productsRepository
         .createQueryBuilder()
@@ -339,12 +359,12 @@ export class ProductsConsumer extends WorkerHost {
         // `legacyResourceId` is an `UnsignedInt64` in 2026-10; the column is a string
         admin_graphql_api_id: product.legacyResourceId != null ? String(product.legacyResourceId) : '',
         inventoryTotal: product.totalInventory,
-        // variants: productVariants,
       };
       products.push(payload);
     }
     return { products, productVariants };
   };
+
   public storeProductDB = async (product: Product): Promise<Product | null> => {
     let productCreated: Product = undefined;
     try {
@@ -368,7 +388,7 @@ export class ProductsConsumer extends WorkerHost {
       };
       productCreated = this.productsRepository.create(payload);
       if (await this.productsRepository.existsBy({ id: productCreated.id })) {
-        const result = await this.productsRepository.update({ id: productCreated.id }, productCreated);
+        await this.productsRepository.update({ id: productCreated.id }, productCreated);
       } else {
         productCreated = await this.productsRepository.save(payload, {});
       }
@@ -383,21 +403,19 @@ export class ProductsConsumer extends WorkerHost {
   private isStore = (data: unknown): data is Store => {
     return data instanceof Store || (typeof data === 'object' && data !== null && 'table_id' in data);
   };
+
   private retrieveProducts = async (
     data: JobRegistry[typeof JOB_TYPES.GET_PRODUCTS]['data'],
   ): Promise<JobRegistry[typeof JOB_TYPES.GET_PRODUCTS]['result']> => {
     const store = data.store;
     let products: Product[];
     try {
-      //const store = job.data;
       products = await this.productsRepository.findBy({
         store_id: this.isStore(store) ? store.table_id : store,
       });
     } catch (error) {
       this.logger.error(error.message);
     }
-    //console.log(await products[0].getAddToCartStatus())
-    //return Promise.resolve(products);
 
     return products;
   };
@@ -416,19 +434,19 @@ export class ProductsConsumer extends WorkerHost {
 
     return result;
   };
+
   private getProductTypesFromDB = async (): Promise<ProductType[]> => {
     const result: ProductType[] = await this.productTypesRepository.find();
 
     return result;
   };
 
-  private getTaxonomyPayload(id?: string) {
-    const categoriesParams = id ? `categories(first: 250, childrenOf: "${id}")` : `categories(first: 250)`;
-
-
+  // NOTE: make sure GetTaxonomyDocument declares `$id` (e.g. `query GetTaxonomy($id: ID) { ... childrenOf: $id ... }`),
+  // otherwise this variable is ignored (or rejected) by Shopify.
+  private getTaxonomyPayload(childrenOf?: string | null) {
     return {
       query: this.taxonomyQueryString,
-      variables: { id },
+      variables: { childrenOf: childrenOf ?? null },
     };
   }
 
@@ -472,10 +490,7 @@ export class ProductsConsumer extends WorkerHost {
             });
           }
         }
-
         // Cache the map for the current level
-        // await this.cacheService.storeMap(currentCacheKey, currentLevelMap);
-        //await this.dataService.setProductCategoryMap(currentCacheKey, currentLevelMap);
         await this.cacheService.set(currentCacheKey, currentLevelMap, 0);
         await this.setProductCategorySyncStatus(true);
       }
@@ -486,6 +501,7 @@ export class ProductsConsumer extends WorkerHost {
       );
     }
   }
+
   private setProductTypeUpdated = async (tableName: string = 'product_type', timestamp?: Date): Promise<void> => {
     const updateTime = timestamp || new Date();
 
@@ -505,7 +521,8 @@ export class ProductsConsumer extends WorkerHost {
       `SELECT last_updated
       FROM table_metadata
       WHERE table_name = $1`,
-      [tableName],);
+      [tableName],
+    );
 
     return result.length > 0 ? result[0].last_updated : null;
   };
@@ -513,25 +530,22 @@ export class ProductsConsumer extends WorkerHost {
   private syncProductTypes = async (
     data: JobRegistry[typeof JOB_TYPES.SYNC_PRODUCT_TYPES]['data'],
   ): Promise<JobRegistry[typeof JOB_TYPES.SYNC_PRODUCT_TYPES]['result']> => {
-    try {
-      // Check if the product categories have been synced in the last 30 minutes
-      const lastUpdated = await this.getProductTypeUpdated();
-      console.log(lastUpdated);
-      const minutes = lastUpdated !== null ? new Date().getTime() - lastUpdated.getTime() : null;
-      if (minutes != null && minutes / (1000 * 60) < 30) {
-        return;
-      }
-
-      const options: ShopifyRequestOptions = {
-        url: this.utilsService.getShopifyURLForStore('graphql.json', data.store),
-        headers: this.utilsService.getGraphQLHeadersForStore(data.store),
-      };
-
-      this.syncProductLevel(null, 'product-types', options);
-      this.setProductTypeUpdated();
-    } catch (error) {
-      this.logger.error(error.message, error.stack, this.syncProductTypes.name);
+    // Skip if the product categories have been synced in the last 30 minutes
+    const lastUpdated = await this.getProductTypeUpdated();
+    const elapsedMs = lastUpdated !== null ? new Date().getTime() - new Date(lastUpdated).getTime() : null;
+    if (elapsedMs != null && elapsedMs / (1000 * 60) < 30) {
+      return;
     }
+
+    const options: ShopifyRequestOptions = {
+      url: this.utilsService.getShopifyURLForStore('graphql.json', data.store),
+      headers: this.utilsService.getGraphQLHeadersForStore(data.store),
+    };
+
+    // Await both so failures propagate to process() and a failed sync does NOT
+    // stamp "last updated" (which would block retries for 30 minutes).
+    await this.syncProductLevel(null, 'product-types', options);
+    await this.setProductTypeUpdated();
   };
 
   private async syncProductLevel(
@@ -539,21 +553,18 @@ export class ProductsConsumer extends WorkerHost {
     cacheKey: string,
     options: ShopifyRequestOptions,
   ): Promise<void> {
-    //try {
     // Get sub product types for the parentId
     options.data = this.getTaxonomyPayload(parentId);
     const response = await this.utilsService.requestToShopify<ProductTypesResponse>('post', options);
+
     if (response.statusCode === 401) {
-      // throw new TokenExpiredException(`Token expired`, {
-      //   shop: '',
-      //   jobId: '',
-      // });
-      throw Error('token expired');
+      throw new Error('token expired');
     }
-    if (response.statusCode != 200 && response.statusCode != 201) {
-      throw new Error('Invalid response');
-    }
-    let productTypes = response.respBody?.taxonomy?.categories?.nodes || [];
+
+    // Throws on GraphQL errors, HTTP/network failures (incl. 429 throttling) and empty bodies,
+    // so the old 200/201 status check is no longer needed.
+    const body = await this.unwrapGraphQL<ProductTypesResponse>(response, `taxonomy(${parentId ?? 'root'})`);
+    let productTypes = body.taxonomy?.categories?.nodes || [];
 
     if (!productTypes.length) return;
 
@@ -578,19 +589,6 @@ export class ProductsConsumer extends WorkerHost {
     // Cache the map for the current level
     await this.cacheService.set(cacheKey, currentLevelMap);
     await this.setProductCategorySyncStatus(true);
-    //await this.cacheService.storeMap(cacheKey, currentLevelMap);
-
-    //} catch (error) {
-    //   if (error instanceof TokenExpiredException) {
-    //     throw error;
-    //   }
-    //   this.logger.error(
-    //     `Error syncing product level with parent ID ${parentId}: ${error}`,
-    //     error.stack,
-    //     this.syncProductLevel.name,
-    //   );
-    //
-    // }
   }
 
   private createProduct = async (
@@ -599,26 +597,21 @@ export class ProductsConsumer extends WorkerHost {
   ): Promise<JobRegistry[typeof JOB_TYPES.CREATE_PRODUCT]['result']> => {
     let lock: Lock;
     let credits: number;
-    try {
-      lock = await this.dataService.getStoreCreditsLock(data.store.id);
-      this.logger.debug(JSON.stringify(lock));
-      credits = await this.dataService.getStoreCredits(data.store.id);
 
-      // const credits = await this.dataService.readStoreCredits(data.store.id);
-      console.log(credits);
-      if (isNaN(credits) || credits == undefined) {
-        job.delay = 2000;
-        //await job.moveToDelayed(2000, job.token);
-        await job.moveToFailed(new Error('lock or credits not found.'), job.token);
-        return true;
-      }
-      if (credits < 2) {
-        await job.moveToFailed(new UnrecoverableError('credits too low for the operation.'), job.token);
-        return true;
-      }
-    } catch (error) {
-      throw error;
+    lock = await this.dataService.getStoreCreditsLock(data.store.id);
+    this.logger.debug(JSON.stringify(lock));
+    credits = await this.dataService.getStoreCredits(data.store.id);
+
+    if (isNaN(credits) || credits == undefined) {
+      job.delay = 2000;
+      await job.moveToFailed(new Error('lock or credits not found.'), job.token);
+      return true;
     }
+    if (credits < 2) {
+      await job.moveToFailed(new UnrecoverableError('credits too low for the operation.'), job.token);
+      return true;
+    }
+
     const store: Store = data.store;
     const product: newProductDto = data.product;
     const locations: StoreLocations[] = [];
@@ -635,25 +628,41 @@ export class ProductsConsumer extends WorkerHost {
         jobId: job.id,
       });
     }
-    if (response.statusCode === 200 && response.respBody?.productCreate?.product) {
-      const createdProduct = response.respBody.productCreate.product;
+
+    const createBody = await this.unwrapGraphQL<CreateProductMutation>(response, 'createProduct', job);
+
+    // Shopify mutations report validation problems in userErrors, with HTTP 200 and no GraphQL `errors`.
+    if (createBody.productCreate?.userErrors?.length) {
+      throw new Error(`productCreate userErrors: ${JSON.stringify(createBody.productCreate.userErrors)}`);
+    }
+
+    if (createBody.productCreate?.product) {
+      const createdProduct = createBody.productCreate.product;
       //create the variants which get associated with the productID
 
-      options.data = this.getProductVariantsPayload(response.respBody.productCreate.product.id, data.product.variants);
+      options.data = this.getProductVariantsPayload(createdProduct.id, data.product.variants);
       const variantsResponse = await this.utilsService.requestToShopify<CreateProductVariantsBulkMutation>(
         'post',
         options,
       );
-      if (
-        variantsResponse.statusCode !== 200 ||
-        !variantsResponse.respBody?.productVariantsBulkCreate?.productVariants
-      ) {
-        throw new Error(`Variant creation failed: ${variantsResponse.statusCode}, ${variantsResponse.error}`);
+      const variantsBody = await this.unwrapGraphQL<CreateProductVariantsBulkMutation>(
+        variantsResponse,
+        'createProductVariantsBulk',
+        job,
+      );
+
+      if (variantsBody.productVariantsBulkCreate?.userErrors?.length) {
+        throw new Error(
+          `productVariantsBulkCreate userErrors: ${JSON.stringify(variantsBody.productVariantsBulkCreate.userErrors)}`,
+        );
+      }
+      if (!variantsBody.productVariantsBulkCreate?.productVariants) {
+        throw new Error(`Variant creation failed: ${variantsResponse.statusCode}`);
       }
 
-      const createdVariants = variantsResponse.respBody.productVariantsBulkCreate.productVariants;
+      const createdVariants = variantsBody.productVariantsBulkCreate.productVariants;
 
-      // 3. Map to DB entities
+      // Map to DB entities
       const { product: productEntity, variants: variantEntities } = await this.mapCreatedProductToDB(
         createdProduct,
         createdVariants,
@@ -661,8 +670,7 @@ export class ProductsConsumer extends WorkerHost {
         store.table_id,
       );
 
-      // 4. Save to database
-      // await this.storeProductDB(productEntity);
+      // Save to database
       await this.productsRepository.upsert(productEntity, ['id']);
 
       for (const variant of variantEntities) {
@@ -674,12 +682,12 @@ export class ProductsConsumer extends WorkerHost {
     await lock.release();
     return true;
   };
+
   private getCreateProductPayload = async (
     store: Store,
     product: newProductDto,
     location: StoreLocations[],
   ): Promise<{ query: string; variables: object }> => {
-    console.log(product.title, product.vendor, product.desc, JSON.stringify(product.tags));
     const category = product.product_type;
     const categoryName = await this.getCategoryName(category);
 
@@ -696,6 +704,7 @@ export class ProductsConsumer extends WorkerHost {
       variables: { input: input },
     };
   };
+
   private getProductVariantsPayload = (productId: string, data: VariantDto[]): { query: string; variables: object } => {
     try {
       const variants: ProductVariantsBulkInput[] = data.map(variant => ({
@@ -725,7 +734,7 @@ export class ProductsConsumer extends WorkerHost {
         },
       };
     } catch (error) {
-      console.error('Error building product variants payload:', error);
+      this.logger.error('Error building product variants payload:', error);
       throw error;
     }
   };
@@ -737,7 +746,6 @@ export class ProductsConsumer extends WorkerHost {
     storeId: number,
   ): Promise<{ product: Product; variants: ProductVariant[] }> => {
     // Map product
-
     const productEntity: Product = new Product();
     productEntity.id = this.extractIdFromGraphQLId(shopifyProduct.id, 'Product');
     productEntity.store_id = storeId;

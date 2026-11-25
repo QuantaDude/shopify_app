@@ -139,15 +139,15 @@ export class UtilsService {
   public getGraphQLHeadersForStore = (store: Store): ShopifyHeaders => {
     return this.checkIfStoreIsPrivate(store)
       ? new AxiosHeaders({
-          'Content-Type': 'application/json',
-          'X-Shopify-Access-Token': store['api_secret_key'],
-          'X-GraphQL-Cost-Include-Fields': true,
-        })
+        'Content-Type': 'application/json',
+        'X-Shopify-Access-Token': store['api_secret_key'],
+        'X-GraphQL-Cost-Include-Fields': true,
+      })
       : new AxiosHeaders({
-          'Content-Type': 'application/json',
-          'X-Shopify-Access-Token': store.access_token,
-          'X-GraphQL-Cost-Include-Fields': true,
-        });
+        'Content-Type': 'application/json',
+        'X-Shopify-Access-Token': store.access_token,
+        'X-GraphQL-Cost-Include-Fields': true,
+      });
   };
   public isAppEmbedded = (): boolean => {
     return this.configService.get('shopify_app_embedded');
@@ -214,7 +214,8 @@ export class UtilsService {
         const requestConfig: AxiosRequestConfig = { method: method, ...endpointOrOptions };
         response = await firstValueFrom(this.httpService.request(requestConfig));
       }
-      // Handle the calls with where the second arguement is not an object, that is, the call includes endpoint, headers, payload as separate values, not an object.
+      // Handle the calls where the second argument is not an object, that is, the call includes
+      // endpoint, headers, payload as separate values.
       else {
         response = await firstValueFrom(
           this.httpService.request({
@@ -230,24 +231,33 @@ export class UtilsService {
       reqResult.respBody = response.data as T;
       reqResult.statusCode = response.status;
 
-      if (method === 'post' && typeof endpointOrOptions === 'object' && endpointOrOptions.url?.includes('graphql')) {
-        if (response.data.errors) {
-          reqResult.statusCode= 400;
-          reqResult.graphQLErrors = response.data.errors;
-          this.logger.error(JSON.stringify(response.data.errors));
+      const isGraphQL = typeof endpointOrOptions === 'object' && !!endpointOrOptions.url?.includes('graphql');
+
+      if (isGraphQL && method.toString().toLowerCase() === 'post') {
+        const gqlErrors = response.data?.errors;
+        if (gqlErrors?.length) {
+          // GraphQL reports failures with HTTP 200, so translate them into a status code callers can act on.
+          const throttled = gqlErrors.some((e: any) => e?.extensions?.code === 'THROTTLED');
+          reqResult.status = false;
+          reqResult.statusCode = throttled ? 429 : 400;
+          reqResult.graphQLErrors = gqlErrors;
+          this.logger.error(JSON.stringify(gqlErrors));
         }
         // Flatten response for GraphQL calls
-        reqResult.respBody = response.data.data;
+        reqResult.respBody = (response.data?.data ?? null) as T;
       }
       return reqResult;
     } catch (error) {
       reqResult.error = true;
 
       if (error.response) {
+        // Non-2xx HTTP response: keep Shopify's body and status code.
         reqResult.respBody = error.response.data as T;
         reqResult.statusCode = error.response.status;
       } else {
-        reqResult.respBody = error.message;
+        // Network error / timeout: do NOT put the message into respBody (it is typed T, not string).
+        reqResult.respBody = null as T;
+        reqResult.errorMessage = error.message;
       }
 
       return reqResult;

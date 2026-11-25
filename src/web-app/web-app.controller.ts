@@ -85,15 +85,12 @@ export class WebAppController {
   public async getDashboard(@CurrentUser() user: UserDto, @Req() req: Request, @Res() res: Response) {
 
     try {
-      console.log("this ran")
       const token = this.utilsService.generateToken(req, res);
-      console.log("this ran")
       //const token = req['generateCsrfToken'](req, res);
       if (user.hasRole(SUPER_ADMIN)) {
         const payload = await this.webAppService.getSuperDashboardPayload(user);
         payload['csrfToken'] = token;
 
-        console.log("done")
         res.render('superadmin/home', payload);
       } else {
         const payload = await this.webAppService.getDashboardPayload(user);
