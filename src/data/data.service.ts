@@ -17,7 +17,7 @@ import { RequestExceptionFilter } from 'src/filters/timeout.exception.filter';
 import { Repository, UpdateResult } from 'typeorm';
 import { CacheService } from './cache/cache.service';
 import { randomBytes } from 'crypto';
-import Redlock, {  Lock } from 'redlock';
+import Redlock, { Lock } from 'redlock';
 
 @Injectable()
 export class DataService {
@@ -41,7 +41,7 @@ export class DataService {
     @InjectRepository(Subscription) private readonly subscriptionRepository: Repository<Subscription>,
     @InjectRepository(Plan) private readonly planRepository: Repository<Plan>,
     @InjectRepository(StorePlan) private readonly storePlanRepository: Repository<StorePlan>,
-  ) {}
+  ) { }
 
   public getStore = async (storeId: number): Promise<Store | null> => {
     try {
@@ -144,7 +144,6 @@ export class DataService {
           storePlan.status = chargeObj.status;
 
           if (chargeObj.status == 'ACTIVE') {
-            console.log('these ran');
             const plans: Plan[] = await this.getPlans();
             const plan = plans.find(plan => plan.name === chargeObj.name);
             console.log('plan retrieved ', plan);
@@ -155,7 +154,7 @@ export class DataService {
             if (lock != null || lock != undefined) {
               const credits = await this.getStoreCredits(storePlan.store_id);
               storePlan.credits = plan.credits + credits;
-              commitedCredits= storePlan.credits;
+              commitedCredits = storePlan.credits;
             }
             // storePlan.credits += plan.credits;
             storePlan.status = 'ACTIVE';
@@ -177,7 +176,7 @@ export class DataService {
           if (lock != null || lock != undefined) {
             const credits = await this.getStoreCredits(storePlan.store_id);
             storePlan.credits = plan.credits + credits;
-            commitedCredits= storePlan.credits;
+            commitedCredits = storePlan.credits;
           }
           storePlan.status = 'ACTIVE';
           //const chargeHistory= storePlan.charge_history;
@@ -186,15 +185,15 @@ export class DataService {
       console.log(JSON.stringify(storePlan));
       await this.storePlanRepository.update({ id: storePlan.id }, storePlan);
       await this.cacheService.set(
-        `${ chargeObj.admin_graphql_api_shop_id.split('/').pop()}-credits`,
+        `${chargeObj.admin_graphql_api_shop_id.split('/').pop()}-credits`,
         commitedCredits,
         '5m',
       );
-      if(chargeObj.status != 'CANCELLED') {
+      if (chargeObj.status != 'CANCELLED') {
         await lock.release();
       }
 
-    } catch(error) {
+    } catch (error) {
       this.logger.error(error.message, error.stack);
       throw error;
     }
@@ -489,7 +488,7 @@ export class DataService {
       this.logger.error(error.message, error.stack, this.getPlans.name);
     }
   };
-  public getProductTypes = async ( key?:string ): Promise<Record<string, string>> => {
+  public getProductTypes = async (key?: string): Promise<Record<string, string>> => {
     let result: Record<string, string> = {};
     if (key != null) {
       result = await this.cacheService.get<Record<string, string>>(key);
@@ -504,18 +503,18 @@ export class DataService {
 
       }
     }
-      result = await this.cacheService.get<Record<string, string>>('product-types');
+    result = await this.cacheService.get<Record<string, string>>('product-types');
 
-      if (result == undefined || result == null) {
-          this.cacheProductTypes();
-          const db = await this.productTypeRepository.findBy({ parentId: key });
-          const record: Record<string, string> = Object.fromEntries(
-            db.map(item => [item.id, item.name])
-          );
+    if (result == undefined || result == null) {
+      this.cacheProductTypes();
+      const db = await this.productTypeRepository.findBy({ parentId: key });
+      const record: Record<string, string> = Object.fromEntries(
+        db.map(item => [item.id, item.name])
+      );
 
-          return record;
-      }
-      return result;
+      return record;
+    }
+    return result;
 
 
   };
@@ -541,7 +540,7 @@ export class DataService {
           children = await this.productTypeRepository.findBy({ isRoot: true });
 
           //if there are no root types, that means it has not been synced from shopify to DB ever, so abort
-          if(children.length == 0) {
+          if (children.length == 0) {
             return;
           }
         } else {
@@ -694,7 +693,7 @@ export class DataService {
 
     if (storedShopDomain === shopDomain) {
       await this.cacheService.
-      delete(key);
+        delete(key);
       return true;
     }
     return false;
@@ -741,28 +740,28 @@ export class DataService {
       return false;
     }
   };
-  public getStoreToken = async(storeId: number): Promise<number> => {
+  public getStoreToken = async (storeId: number): Promise<number> => {
     const credits = await this.cacheService.get<number>(`${storeId}-credits`);
-    if(isNaN(credits)){
-      const storePlan = await this.storePlanRepository.findOneBy({store_id: storeId});
+    if (isNaN(credits)) {
+      const storePlan = await this.storePlanRepository.findOneBy({ store_id: storeId });
       return storePlan.credits;
     }
     return credits;
   };
   public getStoreCredits = async (storeId: number): Promise<number> => {
-    const credits =  await this.cacheService.get<number>(`${storeId}-credits`);
-    if(isNaN(credits)){
-      const creditsDB = await this.storePlanRepository.findOneBy({store_id: storeId});
+    const credits = await this.cacheService.get<number>(`${storeId}-credits`);
+    if (isNaN(credits)) {
+      const creditsDB = await this.storePlanRepository.findOneBy({ store_id: storeId });
       console.log('in db', creditsDB.credits);
       this.cacheService.set(`${storeId}-credits`, creditsDB.credits, '5m');
       let keys = new Set(await this.cacheService.get<Array<string>>('credits-keys'));
       if (keys != undefined || keys != null) {
         keys.add(storeId.toString());
-       // keys.push(storeId.toString());
+        // keys.push(storeId.toString());
       } else {
         keys = new Set<string>();
         keys.add(storeId.toString());
-      //  keys.push(storeId.toString());
+        //  keys.push(storeId.toString());
       }
       await this.cacheService.set('credits-keys', [...keys]);
       console.log('done');
@@ -770,9 +769,9 @@ export class DataService {
     }
     return credits;
   };
-  public setStoreCredits = async(storeId: number, credits: number): Promise<boolean> => {
-    const result= await this.cacheService.set(`${storeId}-credits`, credits, '5m');
-    let keys = new Set( await this.cacheService.get<Array<string>>('credits-keys'));
+  public setStoreCredits = async (storeId: number, credits: number): Promise<boolean> => {
+    const result = await this.cacheService.set(`${storeId}-credits`, credits, '5m');
+    let keys = new Set(await this.cacheService.get<Array<string>>('credits-keys'));
     if (keys != undefined || keys != null) {
       keys.add(storeId.toString());
     } else {
@@ -786,7 +785,7 @@ export class DataService {
   //   (target: DataService, storeId: number): any=> {`${storeId}-credits`},
   // })
   public readStoreCredits = async (storeId: number): Promise<number> => {
-    try{
+    try {
       const value = await this.redLock.using([`locks:${storeId}-credits`], 2000, async signal => {
         const creditsCache = await this.cacheService.get<number>(`${storeId}-credits`);
         if (signal.aborted) {
@@ -794,7 +793,7 @@ export class DataService {
         }
         console.log('in cache', creditsCache);
         if (isNaN(creditsCache)) {
-          const creditsDB = await this.storePlanRepository.findOneBy({store_id: storeId});
+          const creditsDB = await this.storePlanRepository.findOneBy({ store_id: storeId });
           console.log('in db', creditsDB.credits);
           this.cacheService.set(`${storeId}-credits`, creditsDB.credits, '5m');
           let keys = new Set(await this.cacheService.get<Set<string>>('credits-keys'));
@@ -814,7 +813,7 @@ export class DataService {
       });
 
       return value;
-    }catch(error){
+    } catch (error) {
       this.logger.error(error, error.stack);
     }
     //const lock2 = await this.redLock.using(`${storeId}-credits`, duration )
@@ -833,9 +832,9 @@ export class DataService {
     try {
       const result = await this.redLock.acquire([`locks:${storeId}-credits`], 4000, { retryCount: retry });
       return result;
-    } catch(error){
-        this.logger.error(error, error.stack);
-        throw error;
-      }
-    };
+    } catch (error) {
+      this.logger.error(error, error.stack);
+      throw error;
+    }
+  };
 }

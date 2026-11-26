@@ -18,6 +18,8 @@ import {
   AppSubscriptionCreateMutation,
   AppSubscriptionCreateMutationVariables,
   CurrencyCode,
+  GetShopLocationsDocument,
+  GetShopLocationsQuery,
 } from '../../generated/graphql';
 import { DataService } from '../../data/data.service';
 import { Plan } from '../../database/entities/plans.entity';
@@ -44,7 +46,7 @@ export class StoresConsumer extends WorkerHost {
   private readonly logger = new Logger(StoresConsumer.name);
 
   private readonly appSubscriptionCreateMutation: string = print(AppSubscriptionCreateDocument);
-
+  private readonly syncShopLocationsQuery: string = print(GetShopLocationsDocument);
   constructor(
     private readonly cacheService: CacheService,
     @Inject('CACHE_LOCK') private readonly redLock: Redlock,
@@ -264,6 +266,12 @@ export class StoresConsumer extends WorkerHost {
     }
   };
 
+  private syncStoreLocationsPayload(after?: string | null) {
+    return {
+      query: this.syncShopLocationsQuery,
+      variables: { after: after ?? null }
+    }
+  }
   private syncStoreLocations = async (
     data: JobRegistry[typeof JOB_TYPES.SYNC_STORE_LOCATIONS]['data'],
     job: Job,
@@ -281,8 +289,9 @@ export class StoresConsumer extends WorkerHost {
     // Follow pagination: previously only the first page was ever fetched
     let cursor: string | null = null;
     do {
-      options.data = this.getQueryObjForLocations(cursor);
+      options.data = this.syncStoreLocationsPayload(cursor);
       const response: ShopifyResponse = await this.utilsService.requestToShopify('post', options);
+      const body = await this.utilsService.unwrapGraphQL<GetShopLocationsQuery>(response, `location(${cursor ?? 0})`);
 
       if (response.statusCode === 401) {
         throw new TokenExpiredException(`Token expired for ${data.store.table_id}`, {
@@ -292,12 +301,12 @@ export class StoresConsumer extends WorkerHost {
       }
       if (response.statusCode === 200) {
         const result: StoreLocations[] = await this.saveStoreLocations(
-          response.respBody['locations']['edges'],
+          body.locations.edges ?? [],
           store.table_id,
         );
         locations.push(...result);
-        const pageInfo = response.respBody['locations']['pageInfo'];
-        cursor = pageInfo?.hasNextPage === true ? pageInfo['endCursor'] : null;
+        const pageInfo = body.locations.pageInfo;
+        cursor = pageInfo.hasNextPage ? pageInfo.endCursor : null;
       } else {
         cursor = null;
       }
@@ -364,59 +373,6 @@ export class StoresConsumer extends WorkerHost {
   };
   private isStore = (data: unknown): data is Store => {
     return data instanceof Store || (typeof data === 'object' && data !== null && 'table_id' in data);
-  };
-
-  private getQueryObjForLocations = (cursor: string | null): { query: string } | null => {
-    let query: string;
-
-    try {
-      const filter = `(first: 5${cursor ? `, after: "${cursor}"` : ''}, includeInactive: true, includeLegacy: true)`;
-
-      query = `{
-
-                locations${filter} {
-                    edges {
-                        node {
-                            id
-                            name
-
-                            address {
-                                formatted
-                                address1
-                                address2
-
-                                city
-                                country
-                                countryCode
-                                phone
-                                province
-
-                                provinceCode
-                                zip
-                            }
-                        createdAt
-
-                        updatedAt
-                        isActive
-
-                        }
-                    }
-
-                    pageInfo {
-                        hasNextPage
-                        endCursor
-                        hasPreviousPage
-
-                        startCursor
-                    }
-                
-                }
-
-            }`;
-    } catch (error) {
-      this.logger.error(error.message, this.getQueryObjForLocations.name);
-    }
-    return { query };
   };
 
   private isAccessTokenValid = async (storeDetails: Store): Promise<boolean> => {

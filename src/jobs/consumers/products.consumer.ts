@@ -162,43 +162,6 @@ export class ProductsConsumer extends WorkerHost {
     return job.name === name;
   }
 
-  /**
-   * Validates a response from UtilsService.requestToShopify for a GraphQL call and returns its body.
-   *
-   * requestToShopify already flattens GraphQL responses (respBody = response.data.data), and reports
-   * problems through `graphQLErrors`, `error`, `errorMessage` and `statusCode`, never inside respBody.
-   * This helper:
-   *  - logs the raw response (truncated) to the console and to the BullMQ job's own log
-   *  - throws a readable error on GraphQL errors, HTTP/network failures, or an empty body
-   */
-  private async unwrapGraphQL<T>(response: any, label: string, job?: Job): Promise<T> {
-    const dump = JSON.stringify(
-      {
-        status: response?.statusCode,
-        error: response?.error,
-        errorMessage: response?.errorMessage,
-        graphQLErrors: response?.graphQLErrors,
-        body: response?.respBody,
-      },
-      null,
-      2,
-    );
-    this.logger.debug(`[${label}] ${dump.slice(0, 4000)}`); // truncated, product pages are huge
-    await job?.log(`[${label}] ${dump.slice(0, 4000)}`);
-
-    if (response?.graphQLErrors?.length) {
-      throw new Error(`Shopify GraphQL errors (${label}): ${JSON.stringify(response.graphQLErrors)}`);
-    }
-    if (response?.error || (response?.statusCode ?? 0) >= 400) {
-      throw new Error(
-        `Shopify request failed (${label}): ${response?.statusCode} ${response?.errorMessage ?? dump.slice(0, 1000)}`,
-      );
-    }
-    if (response?.respBody == null) {
-      throw new Error(`Empty GraphQL response (${label}): ${dump.slice(0, 1000)}`);
-    }
-    return response.respBody as T;
-  }
 
   private syncProductsQuery = (cursor: string | null = null) => ({
     query: this.syncProductsQueryString, // Auto-generated document
@@ -231,7 +194,7 @@ export class ProductsConsumer extends WorkerHost {
         });
       }
 
-      const body = await this.unwrapGraphQL<SyncProductsQuery>(response, 'syncProducts', job);
+      const body = await this.utilsService.unwrapGraphQL<SyncProductsQuery>(response, 'syncProducts', job);
 
       const { products, productVariants } = await this.mapProductsToDB(body, data.store.table_id);
       totalProducts.push(...products);
@@ -563,7 +526,7 @@ export class ProductsConsumer extends WorkerHost {
 
     // Throws on GraphQL errors, HTTP/network failures (incl. 429 throttling) and empty bodies,
     // so the old 200/201 status check is no longer needed.
-    const body = await this.unwrapGraphQL<ProductTypesResponse>(response, `taxonomy(${parentId ?? 'root'})`);
+    const body = await this.utilsService.unwrapGraphQL<ProductTypesResponse>(response, `taxonomy(${parentId ?? 'root'})`);
     let productTypes = body.taxonomy?.categories?.nodes || [];
 
     if (!productTypes.length) return;
@@ -629,7 +592,7 @@ export class ProductsConsumer extends WorkerHost {
       });
     }
 
-    const createBody = await this.unwrapGraphQL<CreateProductMutation>(response, 'createProduct', job);
+    const createBody = await this.utilsService.unwrapGraphQL<CreateProductMutation>(response, 'createProduct', job);
 
     // Shopify mutations report validation problems in userErrors, with HTTP 200 and no GraphQL `errors`.
     if (createBody.productCreate?.userErrors?.length) {
@@ -645,7 +608,7 @@ export class ProductsConsumer extends WorkerHost {
         'post',
         options,
       );
-      const variantsBody = await this.unwrapGraphQL<CreateProductVariantsBulkMutation>(
+      const variantsBody = await this.utilsService.unwrapGraphQL<CreateProductVariantsBulkMutation>(
         variantsResponse,
         'createProductVariantsBulk',
         job,

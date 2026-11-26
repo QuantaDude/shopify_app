@@ -1,0 +1,29 @@
+query GetShopLocations($cursor: String) {
+  locations(first: 250, after: $cursor) {
+    edges {
+      node {
+        id
+        name
+        address {
+          address1
+          address2
+          city
+          zip
+          province
+          country
+          phone
+          countryCode
+          provinceCode
+        }
+        isActive
+        createdAt
+        updatedAt
+
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+}

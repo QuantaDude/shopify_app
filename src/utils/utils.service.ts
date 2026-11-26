@@ -14,6 +14,7 @@ import { Request, Response } from 'express';
 import { GetInstallCodeDto } from 'src/shopify/shopify-auth/dtos/get-code-query.dto';
 import { GetInstallInitQueryDto } from 'src/shopify/shopify-auth/dtos/get-install-query.dto';
 import * as crypto from 'crypto';
+import { Job } from 'bullmq';
 
 /**
  * Here all the utility functions are defined. These are used throughout the app.
@@ -136,6 +137,43 @@ export class UtilsService {
     }
   }
 
+  /**
+   * Validates a response from UtilsService.requestToShopify for a GraphQL call and returns its body.
+   *
+   * requestToShopify already flattens GraphQL responses (respBody = response.data.data), and reports
+   * problems through `graphQLErrors`, `error`, `errorMessage` and `statusCode`, never inside respBody.
+   * This helper:
+   *  - logs the raw response (truncated) to the console and to the BullMQ job's own log
+   *  - throws a readable error on GraphQL errors, HTTP/network failures, or an empty body
+   */
+  public async unwrapGraphQL<T>(response: any, label: string, job?: Job): Promise<T> {
+    const dump = JSON.stringify(
+      {
+        status: response?.statusCode,
+        error: response?.error,
+        errorMessage: response?.errorMessage,
+        graphQLErrors: response?.graphQLErrors,
+        body: response?.respBody,
+      },
+      null,
+      2,
+    );
+    this.logger.debug(`[${label}] ${dump.slice(0, 4000)}`); // truncated, product pages are huge
+    await job?.log(`[${label}] ${dump.slice(0, 4000)}`);
+
+    if (response?.graphQLErrors?.length) {
+      throw new Error(`Shopify GraphQL errors (${label}): ${JSON.stringify(response.graphQLErrors)}`);
+    }
+    if (response?.error || (response?.statusCode ?? 0) >= 400) {
+      throw new Error(
+        `Shopify request failed (${label}): ${response?.statusCode} ${response?.errorMessage ?? dump.slice(0, 1000)}`,
+      );
+    }
+    if (response?.respBody == null) {
+      throw new Error(`Empty GraphQL response (${label}): ${dump.slice(0, 1000)}`);
+    }
+    return response.respBody as T;
+  }
   public getGraphQLHeadersForStore = (store: Store): ShopifyHeaders => {
     return this.checkIfStoreIsPrivate(store)
       ? new AxiosHeaders({
