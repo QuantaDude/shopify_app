@@ -31,9 +31,12 @@ export class StartupService implements OnApplicationBootstrap {
 
       // Recurring jobs are Job Schedulers since BullMQ 6 (the legacy
       // `repeat` job option was removed in v6).
+      // CHECK_PENDING_PAYMENTS used to run every 5 seconds, which flooded the
+      // queue with ~17k retained jobs per day; once a minute is plenty (the
+      // internal attempt counter only queries Shopify every 3rd run).
       this.jobsService.upsertJobScheduler(
         JOB_TYPES.CHECK_PENDING_PAYMENTS,
-        { pattern: CronExpression.EVERY_5_SECONDS },
+        { pattern: CronExpression.EVERY_MINUTE },
         { data: {}, opts: { attempts: 1, backoff: { delay: 1000, type: 'exponential' } } },
       );
 
@@ -45,18 +48,14 @@ export class StartupService implements OnApplicationBootstrap {
 
       //stub store to fetch product types from shopify
       const store = await this.jobsService.getStore(1);
-      if (store && store != null) {
-        this.jobsService.addJob(JOB_TYPES.SYNC_PRODUCT_TYPES, { store: store });
+      if (store && store != null && 'table_id' in store) {
+        this.jobsService.addJob(JOB_TYPES.SYNC_PRODUCT_TYPES, { storeId: store.table_id });
         // will not sync if the stub store's access token is not an offline token and has expired.
         this.jobsService.upsertJobScheduler(
           JOB_TYPES.SYNC_PRODUCT_TYPES,
           { pattern: CronExpression.EVERY_2_HOURS },
-          { data: { store }, opts: { attempts: 3, backoff: { delay: 5000, type: 'exponential' } } },
+          { data: { storeId: store.table_id }, opts: { attempts: 3, backoff: { delay: 5000, type: 'exponential' } } },
         );
-        // const result = await this.syncProductTypes(store);
-        // if (result != null && result.status == 'AUTH_REQUIRED') {
-        //   this.logger.error("stub store's access token has expired, manual OAuth needed.");
-        // }
       } else {
         this.logger.warn(
           'The SUPER ADMIN/ stub store does not exist. A super admin has to manually start the sync of product types.',

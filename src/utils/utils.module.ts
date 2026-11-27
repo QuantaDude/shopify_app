@@ -16,6 +16,8 @@ import { CsrfProvider } from './providers/csrf.provider';
     TypeOrmModule.forFeature([Store]),
   ],
 
-  exports: [UtilsService],
+  // CsrfProvider is exported because CsrfMiddleware (applied in AppModule)
+  // delegates to the same instance UtilsService uses to mint tokens.
+  exports: [UtilsService, CsrfProvider],
 })
 export class UtilsModule {}

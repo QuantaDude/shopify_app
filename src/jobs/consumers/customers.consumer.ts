@@ -1,5 +1,5 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { JOB_TYPES, JobRegistry, QUEUES } from '../constants/jobs.constants';
+import { AUTH_REQUIRED_REASON, JOB_TYPES, JobRegistry, QUEUES } from '../constants/jobs.constants';
 import { Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Store } from 'src/database/entities/store.entity';
@@ -7,9 +7,10 @@ import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { UtilsService } from 'src/utils/utils.service';
 import { Customer } from 'src/database/entities/customer.entity';
-import { Job } from 'bullmq';
+import { Job, UnrecoverableError } from 'bullmq';
 import { ShopifyRequestOptions } from 'src/utils/types/ShopifyRequestOptions';
 import { ShopifyResponse } from 'src/utils/types/ShopifyResponse';
+import { TokenExpiredException } from '../token-expired.exception';
 
 interface PageInfo {
   hasNextPage: boolean;
@@ -33,6 +34,8 @@ export class CustomersConsumer extends WorkerHost {
 
     @InjectRepository(Customer)
     private readonly customersRepository: Repository<Customer>,
+    @InjectRepository(Store)
+    private readonly storesRepository: Repository<Store>,
   ) {
     super();
   }
@@ -41,12 +44,7 @@ export class CustomersConsumer extends WorkerHost {
     try {
       switch (job.name) {
         case JOB_TYPES.SYNC_CUSTOMERS:
-          if (this.isStore(job.data.store)) {
-            // job.data instanceof Store
-            return await this.syncCustomers(job.data);
-          } else {
-            throw Error('invalid job data, expected Store');
-          }
+          return await this.syncCustomers(job.data, job);
         case JOB_TYPES.GET_CUSTOMERS:
           return await this.retrieveCustomers(job.data);
 
@@ -54,9 +52,27 @@ export class CustomersConsumer extends WorkerHost {
           throw Error('Invalid job');
       }
     } catch (error) {
-      this.logger.error(error.message);
-      return null;
+      this.logger.error(error.message, error.stack);
+
+      // A stale access token is not retryable until the merchant re-authenticates.
+      // The fixed '401' failedReason is what JobsService.addJob matches AUTH_REQUIRED on.
+      if (error['isTokenExpired']) {
+        throw new UnrecoverableError(AUTH_REQUIRED_REASON);
+      }
+      throw error;
     }
+  };
+
+  /**
+   * Job data only carries the store table_id (no access tokens in Redis),
+   * so every Shopify-backed handler loads the store fresh from the DB.
+   */
+  private loadStore = async (storeId: number): Promise<Store> => {
+    const store = await this.storesRepository.findOneBy({ table_id: storeId });
+    if (!store) {
+      throw new UnrecoverableError(`Store ${storeId} not found`);
+    }
+    return store;
   };
 
   private retrieveCustomers = async (
@@ -76,32 +92,37 @@ export class CustomersConsumer extends WorkerHost {
 
   private syncCustomers = async (
     data: JobRegistry[typeof JOB_TYPES.SYNC_CUSTOMERS]['data'],
+    job: Job,
   ): Promise<JobRegistry[typeof JOB_TYPES.SYNC_CUSTOMERS]['result']> => {
-    try {
-      const options: ShopifyRequestOptions = {
-        url: this.utilsService.getShopifyURLForStore('graphql.json', data.store),
-        headers: this.utilsService.getGraphQLHeadersForStore(data.store),
-      };
+    const store = await this.loadStore(data.storeId);
+    const options: ShopifyRequestOptions = {
+      url: this.utilsService.getShopifyURLForStore('graphql.json', store),
+      headers: this.utilsService.getGraphQLHeadersForStore(store),
+    };
 
-      let cursor: string | null = null;
+    let cursor: string | null = null;
 
-      do {
-        options.data = this.getQueryObjectForCustomers(cursor);
-        const response: ShopifyResponse = await this.utilsService.requestToShopify('post', options);
+    do {
+      options.data = this.getQueryObjectForCustomers(cursor);
+      const response: ShopifyResponse = await this.utilsService.requestToShopify('post', options);
 
-        if (response.statusCode == 200) {
-          await this.storeCustomersDB(data.store.table_id, response.respBody['customers']['edges']);
-        }
+      if (response.statusCode == 401) {
+        throw new TokenExpiredException(`Token expired for ${store.table_id}`, {
+          shop: store.table_id.toString(),
+          jobId: job.id,
+        });
+      }
 
-        // console.log(response.respBody['data']['customers']['edges']);
-        // await this.saveOrdersInDB(store.table_id, response.respBody["data"]['orders']['edges']);
-        //console.log(response.respBody);
-        cursor = this.getCursorFromResponse(response.respBody['customers']['pageInfo']);
-      } while (cursor !== null);
-    } catch (error) {
-      this.logger.error(error.message, '', this.syncCustomers.name);
-      return null;
-    }
+      // Throws on GraphQL errors, HTTP/network failures (incl. 429 throttling) and empty bodies.
+      const body = await this.utilsService.unwrapGraphQL<{
+        customers: { edges: any[]; pageInfo: PageInfo };
+      }>(response, 'syncCustomers', job);
+
+      await this.storeCustomersDB(store.table_id, body.customers.edges);
+      cursor = this.getCursorFromResponse(body.customers.pageInfo);
+    } while (cursor !== null);
+
+    return true;
   };
 
   private getCursorFromResponse = (pageInfo: PageInfo): string | null => {

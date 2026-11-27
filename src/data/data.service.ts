@@ -23,7 +23,8 @@ import Redlock, { Lock } from 'redlock';
 export class DataService {
   private readonly logger = new Logger(DataService.name);
   private readonly NONCE_PREFIX = 'shopify:nonce:';
-  private readonly NONCE_EXPIRY = '120s';
+  /** Nonces live long enough for a merchant to read the consent screen; single-use and deleted on validation. */
+  private readonly NONCE_EXPIRY = '10m';
 
   constructor(
     private readonly cacheService: CacheService,
@@ -146,7 +147,6 @@ export class DataService {
           if (chargeObj.status == 'ACTIVE') {
             const plans: Plan[] = await this.getPlans();
             const plan = plans.find(plan => plan.name === chargeObj.name);
-            console.log('plan retrieved ', plan);
             storePlan.plan_id = plan.id;
             storePlan.price = plan.price;
 
@@ -182,7 +182,6 @@ export class DataService {
           //const chargeHistory= storePlan.charge_history;
         }
       }
-      console.log(JSON.stringify(storePlan));
       await this.storePlanRepository.update({ id: storePlan.id }, storePlan);
       await this.cacheService.set(
         `${chargeObj.admin_graphql_api_shop_id.split('/').pop()}-credits`,
@@ -521,8 +520,6 @@ export class DataService {
   //this function is also in products.consumer.ts, need to delete that.
   private async cacheProductTypes(parentId: string | null = '', cacheKey: string = 'product-types'): Promise<void> {
     try {
-      // Stack to store work items: [parentId, cacheKey]
-      console.log(cacheKey)
       const stack: Array<{
         parentId: string | null;
         cacheKey: string;
@@ -752,19 +749,18 @@ export class DataService {
     const credits = await this.cacheService.get<number>(`${storeId}-credits`);
     if (isNaN(credits)) {
       const creditsDB = await this.storePlanRepository.findOneBy({ store_id: storeId });
-      console.log('in db', creditsDB.credits);
+      if (creditsDB == null) {
+        this.logger.warn(`No StorePlan row found for store ${storeId}`);
+        return NaN;
+      }
       this.cacheService.set(`${storeId}-credits`, creditsDB.credits, '5m');
       let keys = new Set(await this.cacheService.get<Array<string>>('credits-keys'));
-      if (keys != undefined || keys != null) {
+      if (keys != undefined) {
         keys.add(storeId.toString());
-        // keys.push(storeId.toString());
       } else {
-        keys = new Set<string>();
-        keys.add(storeId.toString());
-        //  keys.push(storeId.toString());
+        keys = new Set<string>([storeId.toString()]);
       }
       await this.cacheService.set('credits-keys', [...keys]);
-      console.log('done');
       return creditsDB.credits;
     }
     return credits;
@@ -791,10 +787,8 @@ export class DataService {
         if (signal.aborted) {
           throw signal.error;
         }
-        console.log('in cache', creditsCache);
         if (isNaN(creditsCache)) {
           const creditsDB = await this.storePlanRepository.findOneBy({ store_id: storeId });
-          console.log('in db', creditsDB.credits);
           this.cacheService.set(`${storeId}-credits`, creditsDB.credits, '5m');
           let keys = new Set(await this.cacheService.get<Set<string>>('credits-keys'));
           if (keys != undefined || keys != null) {
@@ -805,7 +799,6 @@ export class DataService {
           }
           await this.cacheService.set('credits-keys', [...keys]);
 
-          console.log('done');
           return creditsDB.credits;
         } else {
           return creditsCache;

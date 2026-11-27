@@ -26,6 +26,10 @@ export class GetInstallInitQueryDto {
 
   @IsOptional()
   @IsString()
+  locale?: string;
+
+  @IsOptional()
+  @IsString()
   session?: string;
   // @IsNotEmpty()
   // @IsString()

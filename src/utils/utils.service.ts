@@ -76,6 +76,16 @@ export class UtilsService {
       if (!hmac) {
         return false;
       }
+
+      const secret = this.configService.get('shopify_api_secret');
+      if (!secret) {
+        // a missing API_SECRET makes every request look like an HMAC failure.
+        this.logger.fatal(
+          'API_SECRET is not set — cannot verify Shopify HMAC. Check your .env / .env.development file.',
+        );
+        return false;
+      }
+
       const { hmac: _dropped, ...rest } = request as unknown as Record<string, unknown>;
 
       const entries = Object.entries(rest)
@@ -89,7 +99,7 @@ export class UtilsService {
       const str = entries.join('&');
 
       const verHmac = crypto
-        .createHmac('sha256', this.configService.get('shopify_api_secret'))
+        .createHmac('sha256', secret)
         .update(str)
         .digest('hex');
 
@@ -301,10 +311,6 @@ export class UtilsService {
       return reqResult;
     }
   }
-
-  public getGenerateTokenfunction = (): Function => {
-    return this.csrfProvider.getGenerateToken;
-  };
 
   public generateToken = (req: Request, res: Response): string => {
     //const gentoken: Function = this.csrfProvider.getGenerateToken;

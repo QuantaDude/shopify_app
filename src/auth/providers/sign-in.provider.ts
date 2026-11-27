@@ -48,8 +48,6 @@ export class SignInProvider {
       throw new UnauthorizedException('Incorrect Password');
     }
 
-    console.log(user_id, password, email)
-    console.log(this.jwtConfig)
     return await this.jwtService.signAsync(
       {
         sub: user_id,

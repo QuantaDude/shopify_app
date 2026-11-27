@@ -64,21 +64,9 @@ export class ShopifyAuthController {
             return response.redirect(endpoint);
           }
         } else {
-          //console.log(endpoint)
           const url: string = await this.installationService.getOAuthURL(this.clientId, shop);
-          const urlObj = new URL(url);
-          const nonce: string = urlObj.searchParams.get('state');
-
-          // Set signed cookie with nonce
-          response.cookie('shopify.oauth.state', nonce, {
-            httpOnly: true,
-            secure: true,
-            sameSite: 'lax',
-            signed: true,
-            maxAge: 60 * 60 * 1000, // 1 hour expiry
-          });
-          console.log(url);
-
+          // The nonce is stored server-side (Redis, single-use, TTL'd) inside
+          // getOAuthURL; no client-side cookie needed.
           return response.redirect(303, url);
         }
       } else {
@@ -96,88 +84,97 @@ export class ShopifyAuthController {
       }
     } catch (error) {
       if (error instanceof UnauthorizedException) {
-        // console.log('invalid HMAC:', error);
         throw error;
       }
+      this.logger.error(error.message, error.stack, this.startInstallation.name);
+      throw new UnauthorizedException({
+        status: 401,
+        error: 'Unauthorized',
+        message: 'Installation could not be started',
+      });
     }
   }
-  /**
-   * This route handles the installation.
-   * */
   @Get('/redirect')
   public async install(@Req() request: Request, @Query() query: GetInstallCodeDto, @Res() response: Response) {
-    //console.log(request)
     try {
       const validateHMAC: boolean = await this.utilsService.validateRequestFromShopify(query);
-      const validateNonce: boolean = true //await this.installationService.validateNonce(query.state, query.shop);
-      if (validateHMAC && validateNonce) {
-        const shop: string = query.shop;
-        const code: string = query.code;
+      // The nonce previously "did not work" because the cache stack silently
+      // expired every TTL'd key (the @keyv/redis adapter expected absolute epoch
+      // ms while keyv passed relative TTLs); with that fixed the nonce check is
+      // reliable again.
+      const validateNonce: boolean = await this.installationService.validateNonce(query.state, query.shop);
 
-        const accessToken = await this.installationService.getAccessTokenForStore(shop, code);
-        if (accessToken != false && accessToken.length > 0) {
-          const shopDetails = await this.installationService.getShopDetailsFromShopify(shop, accessToken);
-          console.log(shopDetails);
-          const storeToDB = await this.installationService.saveStoreDetails(shopDetails.shop, accessToken);
+      if (!validateHMAC) {
+        this.logger.warn(`HMAC isn't from Shopify`);
+        throw new UnauthorizedException({
+          status: 401,
+          error: 'Unauthorized',
+          message: 'Invalid HMAC signature',
+          details: {
+            reason: 'HMAC verification failed',
+          },
+        });
+      }
+      if (!validateNonce) {
+        this.logger.warn(`Nonce validation failed for ${query.shop}`);
+        throw new UnauthorizedException({
+          status: 401,
+          error: 'Unauthorized',
+          message: 'Invalid Nonce',
+        });
+      }
 
-          //console.log(shopDetails)
-          if (storeToDB.success) {
-            this.logger.log(
-              `App succesfully installed for store ${shopDetails.shop.myshopifyDomain} and stored to the Database.`,
-            );
+      const shop: string = query.shop;
+      const code: string = query.code;
 
-            const isEmbedded = this.utilsService.isAppEmbedded();
+      const accessToken = await this.installationService.getAccessTokenForStore(shop, code);
+      if (accessToken != false && accessToken.length > 0) {
+        const shopDetails = await this.installationService.getShopDetailsFromShopify(shop, accessToken);
+        const storeToDB = await this.installationService.saveStoreDetails(shopDetails.shop, accessToken);
 
-            if (isEmbedded) {
-            } else {
-              return response.redirect('/');
-            }
+        if (storeToDB.success) {
+          this.logger.log(
+            `App succesfully installed for store ${shopDetails.shop.myshopifyDomain} and stored to the Database.`,
+          );
+
+          const isEmbedded = this.utilsService.isAppEmbedded();
+
+          if (isEmbedded) {
+            //handle embedded apps
           } else {
-            //failed to store all details in DB
+            return response.redirect('/');
           }
         } else {
-          this.logger.debug(
-            `Installation failed. Failed to retrieve access token for code ${code} and shop domain ${shop}.`,
+          //failed to store all details in DB
+          this.logger.error(
+            `Failed to store installed store ${shop} to the Database.`,
+            undefined,
+            this.install.name,
           );
-          throw new UnauthorizedException({
-            status: 401,
-            error: 'Unauthorized',
-            message: 'Invalid code or shop domain',
-            details: {
-              reason: 'failed to retrieve access token for the specified store',
-              //requestId: 'xyz123' // include request tracking
-            },
-          });
         }
       } else {
-        if (!validateNonce) {
-          this.logger.warn('Invalid Nonce');
-
-          throw new UnauthorizedException({
-            status: 401,
-            error: 'Unauthorized',
-            message: 'Invalid Nonce'
-          })
-        }
-        if (!validateHMAC) {
-
-          this.logger.warn(`HMAC isn't from Shopify`);
-          throw new UnauthorizedException({
-            status: 401,
-            error: 'Unauthorized',
-            message: 'Invalid HMAC signature',
-            details: {
-              reason: 'HMAC verification failed',
-              //requestId: 'xyz123' // include request tracking
-            },
-          });
-        }
+        this.logger.debug(
+          `Installation failed. Failed to retrieve access token for code ${code} and shop domain ${shop}.`,
+        );
+        throw new UnauthorizedException({
+          status: 401,
+          error: 'Unauthorized',
+          message: 'Invalid code or shop domain',
+          details: {
+            reason: 'failed to retrieve access token for the specified store',
+          },
+        });
       }
     } catch (error) {
       if (error instanceof UnauthorizedException) {
-        //console.log('invalid HMAC:', error);
         throw error;
       }
+      this.logger.error(error.message, error.stack, this.install.name);
+      throw new UnauthorizedException({
+        status: 401,
+        error: 'Unauthorized',
+        message: 'Installation failed',
+      });
     }
   }
   /**
@@ -188,33 +185,57 @@ export class ShopifyAuthController {
     try {
       const validateHMAC: boolean = await this.utilsService.validateRequestFromShopify(query);
       const validateNonce: boolean = await this.installationService.validateNonce(query.state, query.shop);
-      if (validateHMAC) {
-        const shop: string = query.shop;
-        const code: string = query.code;
-        const accessToken = await this.installationService.getAccessTokenForStore(shop, code);
-        if (accessToken != false && accessToken.length > 0) {
-          const stores: Store[] = await this.utilsService.getAllStoresByDomain(shop);
 
-          if (stores.length > 0) {
-            let store: number = stores[0].id;
-            if (stores.length > 1) {
-              store = parseInt(
-                (await this.installationService.getShopDetailsFromShopify(shop, accessToken)).shop.id.split('/').pop(),
-                10,
-              );
-            }
-            const updateAccessToken = await this.installationService.updateAccessToken(store, accessToken);
-            //console.log(updateAccessToken);
-            console.log(accessToken);
-            await this.jobsService.resumePausedJobsForStore(shop, accessToken);
-            response.redirect('/dashboard');
-          } else {
-            //store doesn't exist in DB
+      if (!validateHMAC) {
+        this.logger.warn(`HMAC isn't from Shopify`);
+        throw new UnauthorizedException({
+          status: 401,
+          error: 'Unauthorized',
+          message: 'Invalid HMAC signature',
+        });
+      }
+      if (!validateNonce) {
+        this.logger.warn(`Nonce validation failed for ${query.shop}`);
+        throw new UnauthorizedException({
+          status: 401,
+          error: 'Unauthorized',
+          message: 'Invalid Nonce',
+        });
+      }
+
+      const shop: string = query.shop;
+      const code: string = query.code;
+      const accessToken = await this.installationService.getAccessTokenForStore(shop, code);
+      if (accessToken != false && accessToken.length > 0) {
+        const stores: Store[] = await this.utilsService.getAllStoresByDomain(shop);
+
+        if (stores.length > 0) {
+          let store: number = stores[0].id;
+          if (stores.length > 1) {
+            store = parseInt(
+              (await this.installationService.getShopDetailsFromShopify(shop, accessToken)).shop.id.split('/').pop(),
+              10,
+            );
           }
+          const updateAccessToken = await this.installationService.updateAccessToken(store, accessToken);
+          if (updateAccessToken) {
+            // The new token is already persisted; consumers re-read it from the DB,
+            // so resuming just re-runs the parked failed job.
+            await this.jobsService.resumePausedJobsForStore(shop);
+          }
+          response.redirect('/dashboard');
+        } else {
+          //store doesn't exist in DB
+          this.logger.warn(`Re-auth requested for unknown store ${shop}`);
+          response.redirect('/');
         }
       }
     } catch (error) {
-      this.logger.error(error.message);
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      this.logger.error(error.message, error.stack, this.updateToken.name);
+      response.redirect('/dashboard');
     }
   }
 }

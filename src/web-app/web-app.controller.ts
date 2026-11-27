@@ -100,7 +100,9 @@ export class WebAppController {
       }
       //console.log(recentOrders[0].id)
     } catch (err) {
-      this.logger.warn(err)
+      this.logger.error(err.message, err.stack, this.getDashboard.name);
+      // Sending nothing at all would leave the browser hanging.
+      res.status(500).send('Failed to load dashboard');
     }
   }
   @Get('/settings')
@@ -273,7 +275,6 @@ export class WebAppController {
     try {
       if (user.can(['all_access', 'write_locations'])) {
         const result = await this.webAppService.syncLocations(user, res);
-        console.log('in controller', result);
         if (result != undefined) {
           res.json(result);
           return;
@@ -303,10 +304,12 @@ export class WebAppController {
   public async syncProductTypes(@CurrentUser() user: UserDto, @Res() res: Response) {
     if (user.can(['all_access', 'write_product_types']) || user.hasRole('SUPER_ADMIN')) {
       this.webAppService.syncProductTypes(user.store);
+      // 201: the sync job was queued (it runs in the background).
+      res.status(201).json({ success: true });
     } else {
+      // Return, otherwise the 201 below overwrites the 401 (headers already sent).
       res.status(401).json({ success: false });
     }
-    res.status(201).json({ success: true });
   }
 
   @Post('/productPublish')
@@ -327,7 +330,6 @@ export class WebAppController {
           res.send({ error: result.status });
           return;
         }
-        console.log('this');
         res.redirect(`/products?storeId=${user.store.table_id}`);
       }
     } catch (error) {

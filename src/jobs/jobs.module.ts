@@ -11,28 +11,24 @@ import { Product } from 'src/database/entities/product.entity';
 import { ProductsConsumer } from './consumers/products.consumer';
 import { Order } from 'src/database/entities/order.entity';
 import { OrdersConsumer } from './consumers/orders.consumer';
-import { OrdersQueueEvents } from './providers/order-listener.provider';
-import { ProductsQueueEvents } from './providers/products-listener.provider';
 import { CustomersConsumer } from './consumers/customers.consumer';
 import { Customer } from 'src/database/entities/customer.entity';
-import { CustomersQueueEvents } from './providers/retrieve-customers-listener';
-import { StoresQueueEvents } from './providers/store-listener.provider';
 import { StoresConsumer } from './consumers/store.consumer';
 import { UserStore } from 'src/database/entities/userstore.entity';
 import { User } from 'src/database/entities/user.entity';
 import { UsersConsumer } from './consumers/users.consumer';
-import { UsersQueueEvents } from './providers/user-listener.provider';
 import { AuthModule } from 'src/auth/auth.module';
 import { StoreLocations } from 'src/database/entities/storeLocations.entity';
 import { ProductType } from 'src/database/entities/productType.entity';
 import { RedisModule } from '@nestjs-modules/ioredis';
 
 import { ProductVariant } from 'src/database/entities/productVariant.entity';
-import { Queue } from 'bullmq';
 import { DataModule } from 'src/data/data.module';
 import { CronConsumer } from './consumers/cron.consumer';
 import { StorePlan } from '../database/entities/storePlans.entity';
 import { CacheModule } from '../data/cache/cache.module';
+
+export const PAUSED_QUEUE = 'PAUSED_QUEUE';
 
 @Module({
   imports: [
@@ -62,6 +58,12 @@ import { CacheModule } from '../data/cache/cache.module';
           host: configService.get<string>('redis.host'),
           port: configService.get<number>('redis.port'),
         },
+        defaultJobOptions: {
+          // Keep finished jobs for a day (max 5000) and failed jobs for a week,
+          // so BullMQ stops retaining every completed job forever (Redis bloat).
+          removeOnComplete: { age: 24 * 60 * 60, count: 5000 },
+          removeOnFail: { age: 7 * 24 * 60 * 60 },
+        },
       }),
     }),
     BullModule.registerQueueAsync(
@@ -72,6 +74,7 @@ import { CacheModule } from '../data/cache/cache.module';
       { name: QUEUES.CUSTOMERS },
       { name: QUEUES.USERS },
       { name: QUEUES.CRON },
+      { name: PAUSED_QUEUE },
     ),
     RedisModule.forRootAsync({
       imports: [ConfigModule],
@@ -85,16 +88,6 @@ import { CacheModule } from '../data/cache/cache.module';
   ],
 
   providers: [
-    {
-      inject: [ConfigService],
-      provide: 'BullQueue_PAUSED_QUEUE',
-      useFactory: configService =>
-        new Queue('PAUSED_QUEUE', {
-          connection: {
-            url: `redis://${configService.get('redis.host')}:${configService.get('redis.port')}`,
-          },
-        }),
-    },
     JobsService,
     ConfigWebhookConsumer,
     ProductsConsumer,
@@ -104,11 +97,6 @@ import { CacheModule } from '../data/cache/cache.module';
     UsersConsumer,
     CronConsumer,
 
-    OrdersQueueEvents,
-    CustomersQueueEvents,
-    StoresQueueEvents,
-    UsersQueueEvents,
-    ProductsQueueEvents,
   ],
   controllers: [],
   exports: [JobsService],

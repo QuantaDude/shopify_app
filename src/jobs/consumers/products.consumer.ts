@@ -1,5 +1,10 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { JOB_TYPES, JobRegistry, QUEUES } from '../constants/jobs.constants';
+import {
+  AUTH_REQUIRED_REASON,
+  JOB_TYPES,
+  JobRegistry,
+  QUEUES,
+} from '../constants/jobs.constants';
 import { InjectEntityManager, InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { UtilsService } from 'src/utils/utils.service';
@@ -11,9 +16,8 @@ import { AxiosHeaders } from 'axios';
 import { Product } from 'src/database/entities/product.entity';
 import { Logger } from '@nestjs/common';
 import { newProductDto } from 'src/web-app/dtos/new-product.dto';
-import { StoreLocations } from 'src/database/entities/storeLocations.entity';
-import { ProductType } from 'src/database/entities/productType.entity';
 import { VariantDto } from 'src/web-app/dtos/product-variant.dto';
+import { ProductType } from 'src/database/entities/productType.entity';
 import { InventoryLevel, ProductVariant } from 'src/database/entities/productVariant.entity';
 import { TokenExpiredException } from '../token-expired.exception';
 import { DataService } from 'src/data/data.service';
@@ -31,7 +35,6 @@ import {
   SyncProductsQuery,
 } from 'src/generated/graphql';
 import { print } from 'graphql';
-import { Lock } from 'redlock';
 import { CacheService } from '../../data/cache/cache.service';
 
 export type ProductsType = {
@@ -100,6 +103,8 @@ export class ProductsConsumer extends WorkerHost {
     private readonly productTypesRepository: Repository<ProductType>,
     @InjectRepository(ProductVariant)
     private readonly productVariantsRepository: Repository<ProductVariant>,
+    @InjectRepository(Store)
+    private readonly storesRepository: Repository<Store>,
   ) {
     super();
   }
@@ -128,14 +133,27 @@ export class ProductsConsumer extends WorkerHost {
       this.logger.error(error.message, error.stack);
 
       if (error['isTokenExpired']) {
-        await job.moveToFailed(new UnrecoverableError(`401`), job.token);
-        return;
+        // A stale access token is not retryable until the merchant re-authenticates.
+        // The fixed failedReason is what JobsService.addJob matches AUTH_REQUIRED on.
+        throw new UnrecoverableError(AUTH_REQUIRED_REASON);
       }
 
       // Rethrow so BullMQ marks the job as failed (and applies your retry/backoff settings)
       // instead of silently reporting it as completed.
       throw error;
     }
+  };
+
+  /**
+   * Job data only carries the store table_id (no access tokens in Redis),
+   * so every Shopify-backed handler loads the store fresh from the DB.
+   */
+  private loadStore = async (storeId: number): Promise<Store> => {
+    const store = await this.storesRepository.findOneBy({ table_id: storeId });
+    if (!store) {
+      throw new UnrecoverableError(`Store ${storeId} not found`);
+    }
+    return store;
   };
 
   public setProductCategorySyncStatus = async (status: boolean): Promise<boolean> => {
@@ -172,6 +190,7 @@ export class ProductsConsumer extends WorkerHost {
     data: JobRegistry[typeof JOB_TYPES.SYNC_PRODUCTS]['data'],
     job: Job,
   ): Promise<JobRegistry[typeof JOB_TYPES.SYNC_PRODUCTS]['result']> => {
+    const store = await this.loadStore(data.storeId);
     const totalProducts: any[] = [];
     const totalProductVariants: any[] = [];
     let cursor: string | null = null;
@@ -180,23 +199,23 @@ export class ProductsConsumer extends WorkerHost {
     const requestOptions: ShopifyRequestOptions = { url: null, headers: null };
     requestOptions.headers = new AxiosHeaders()
       .set('Content-Type', 'application/json')
-      .set('X-Shopify-Access-Token', data.store.access_token);
-    requestOptions.url = this.utilsService.getShopifyURLForStore('graphql.json', data.store);
+      .set('X-Shopify-Access-Token', store.access_token);
+    requestOptions.url = this.utilsService.getShopifyURLForStore('graphql.json', store);
 
     while (hasNextPage) {
       requestOptions.data = this.syncProductsQuery(cursor);
       const response = await this.utilsService.requestToShopify<SyncProductsQuery>('post', requestOptions);
 
       if (response.statusCode == 401) {
-        throw new TokenExpiredException(`Token expired for ${data.store.table_id}`, {
-          shop: data.store.table_id.toString(),
+        throw new TokenExpiredException(`Token expired for ${store.table_id}`, {
+          shop: store.table_id.toString(),
           jobId: job.id,
         });
       }
 
       const body = await this.utilsService.unwrapGraphQL<SyncProductsQuery>(response, 'syncProducts', job);
 
-      const { products, productVariants } = await this.mapProductsToDB(body, data.store.table_id);
+      const { products, productVariants } = await this.mapProductsToDB(body, store.table_id);
       totalProducts.push(...products);
       totalProductVariants.push(...productVariants);
 
@@ -211,7 +230,7 @@ export class ProductsConsumer extends WorkerHost {
       await this.productsRepository
         .createQueryBuilder()
         .delete()
-        .where('store_id = :storeId', { storeId: data.store.table_id })
+        .where('store_id = :storeId', { storeId: store.table_id })
         .andWhere('id NOT IN (:...productIds)', { productIds: shopifyProductIds })
         .execute();
       const productEntities: Product[] = this.productsRepository.create(totalProducts);
@@ -500,9 +519,11 @@ export class ProductsConsumer extends WorkerHost {
       return;
     }
 
+    const store = await this.loadStore(data.storeId);
+
     const options: ShopifyRequestOptions = {
-      url: this.utilsService.getShopifyURLForStore('graphql.json', data.store),
-      headers: this.utilsService.getGraphQLHeadersForStore(data.store),
+      url: this.utilsService.getShopifyURLForStore('graphql.json', store),
+      headers: this.utilsService.getGraphQLHeadersForStore(store),
     };
 
     // Await both so failures propagate to process() and a failed sync does NOT
@@ -558,52 +579,57 @@ export class ProductsConsumer extends WorkerHost {
     data: JobRegistry[typeof JOB_TYPES.CREATE_PRODUCT]['data'],
     job: Job,
   ): Promise<JobRegistry[typeof JOB_TYPES.CREATE_PRODUCT]['result']> => {
-    let lock: Lock;
-    let credits: number;
-
-    lock = await this.dataService.getStoreCreditsLock(data.store.id);
-    this.logger.debug(JSON.stringify(lock));
-    credits = await this.dataService.getStoreCredits(data.store.id);
-
-    if (isNaN(credits) || credits == undefined) {
-      job.delay = 2000;
-      await job.moveToFailed(new Error('lock or credits not found.'), job.token);
-      return true;
-    }
-    if (credits < 2) {
-      await job.moveToFailed(new UnrecoverableError('credits too low for the operation.'), job.token);
-      return true;
-    }
-
-    const store: Store = data.store;
+    const store: Store = await this.loadStore(data.storeId);
     const product: newProductDto = data.product;
-    const locations: StoreLocations[] = [];
-    const options: ShopifyRequestOptions = {
-      url: this.utilsService.getShopifyURLForStore('graphql.json', store),
-      headers: this.utilsService.getGraphQLHeadersForStore(store),
-    };
-    options.data = await this.getCreateProductPayload(store, product, locations);
-    const response = await this.utilsService.requestToShopify<CreateProductMutation>('post', options);
 
-    if (response.statusCode === 401) {
-      throw new TokenExpiredException(`Token expired for ${data.store.table_id}`, {
-        shop: data.store.table_id.toString(),
-        jobId: job.id,
-      });
-    }
+    // One product creation per store at a time, and the credits check + deduction
+    // must happen under the same lock so concurrent jobs can't double-spend.
+    const lock = await this.dataService.getStoreCreditsLock(store.id);
+    try {
+      const credits = await this.dataService.getStoreCredits(store.id);
 
-    const createBody = await this.utilsService.unwrapGraphQL<CreateProductMutation>(response, 'createProduct', job);
+      if (credits == null || isNaN(credits)) {
+        // No StorePlan row (or no cached credits) yet — billing may still be settling;
+        // this is transient, so let BullMQ retry with backoff instead of failing hard.
+        throw new Error(`Credits for store ${store.id} are not available yet`);
+      }
+      if (credits < 2) {
+        // Retrying will not add credits, so fail permanently.
+        throw new UnrecoverableError('credits too low for the operation.');
+      }
 
-    // Shopify mutations report validation problems in userErrors, with HTTP 200 and no GraphQL `errors`.
-    if (createBody.productCreate?.userErrors?.length) {
-      throw new Error(`productCreate userErrors: ${JSON.stringify(createBody.productCreate.userErrors)}`);
-    }
+      const options: ShopifyRequestOptions = {
+        url: this.utilsService.getShopifyURLForStore('graphql.json', store),
+        headers: this.utilsService.getGraphQLHeadersForStore(store),
+      };
+      options.data = await this.getCreateProductPayload(store, product);
+      const response = await this.utilsService.requestToShopify<CreateProductMutation>('post', options);
 
-    if (createBody.productCreate?.product) {
+      if (response.statusCode === 401) {
+        throw new TokenExpiredException(`Token expired for ${store.table_id}`, {
+          shop: store.table_id.toString(),
+          jobId: job.id,
+        });
+      }
+
+      const createBody = await this.utilsService.unwrapGraphQL<CreateProductMutation>(response, 'createProduct', job);
+
+      // Shopify mutations report validation problems in userErrors, with HTTP 200 and no GraphQL `errors`.
+      // Those are deterministic failures — retrying the exact same input will not help.
+      if (createBody.productCreate?.userErrors?.length) {
+        throw new UnrecoverableError(
+          `productCreate userErrors: ${JSON.stringify(createBody.productCreate.userErrors)}`,
+        );
+      }
+      if (!createBody.productCreate?.product) {
+        throw new UnrecoverableError(
+          `productCreate returned neither a product nor userErrors: ${JSON.stringify(createBody.productCreate)}`,
+        );
+      }
+
       const createdProduct = createBody.productCreate.product;
-      //create the variants which get associated with the productID
-
-      options.data = this.getProductVariantsPayload(createdProduct.id, data.product.variants);
+      // Create the variants which get associated with the productID
+      options.data = this.getProductVariantsPayload(createdProduct.id, product.variants);
       const variantsResponse = await this.utilsService.requestToShopify<CreateProductVariantsBulkMutation>(
         'post',
         options,
@@ -615,7 +641,7 @@ export class ProductsConsumer extends WorkerHost {
       );
 
       if (variantsBody.productVariantsBulkCreate?.userErrors?.length) {
-        throw new Error(
+        throw new UnrecoverableError(
           `productVariantsBulkCreate userErrors: ${JSON.stringify(variantsBody.productVariantsBulkCreate.userErrors)}`,
         );
       }
@@ -625,31 +651,34 @@ export class ProductsConsumer extends WorkerHost {
 
       const createdVariants = variantsBody.productVariantsBulkCreate.productVariants;
 
-      // Map to DB entities
+      // Map to DB entities and save
       const { product: productEntity, variants: variantEntities } = await this.mapCreatedProductToDB(
         createdProduct,
         createdVariants,
-        data.product,
+        product,
         store.table_id,
       );
 
-      // Save to database
       await this.productsRepository.upsert(productEntity, ['id']);
 
       for (const variant of variantEntities) {
         await this.productVariantsRepository.upsert(variant, ['id']);
       }
+
+      // Deduct the credits only after the product and all its variants were
+      // actually created and saved — a failed run must not cost credits.
+      await this.dataService.setStoreCredits(store.id, credits - 2);
+
+      return true;
+    } finally {
+      // Always release the lock, even when the product creation threw.
+      await lock.release();
     }
-    credits -= 2;
-    await this.dataService.setStoreCredits(data.store.id, credits);
-    await lock.release();
-    return true;
   };
 
   private getCreateProductPayload = async (
     store: Store,
     product: newProductDto,
-    location: StoreLocations[],
   ): Promise<{ query: string; variables: object }> => {
     const category = product.product_type;
     const categoryName = await this.getCategoryName(category);

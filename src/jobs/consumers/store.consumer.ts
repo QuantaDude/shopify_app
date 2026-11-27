@@ -1,5 +1,5 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { JOB_TYPES, JobRegistry, QUEUES } from '../constants/jobs.constants';
+import { AUTH_REQUIRED_REASON, JOB_TYPES, JobRegistry, QUEUES } from '../constants/jobs.constants';
 import { Store } from 'src/database/entities/store.entity';
 import { Inject, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -89,10 +89,25 @@ export class StoresConsumer extends WorkerHost {
     } catch (error) {
       this.logger.error(error.message, error.stack);
 
+      // A stale access token is not retryable until the merchant re-authenticates.
+      // The fixed '401' failedReason is what JobsService.addJob matches AUTH_REQUIRED on.
       if (error['isTokenExpired']) {
-        await job.moveToFailed(new UnrecoverableError('401'), job.token);
+        throw new UnrecoverableError(AUTH_REQUIRED_REASON);
       }
+      throw error;
     }
+  };
+
+  /**
+   * Job data only carries the store table_id (no access tokens in Redis),
+   * so every Shopify-backed handler loads the store fresh from the DB.
+   */
+  private loadStore = async (storeId: number): Promise<Store> => {
+    const store = await this.storesRepository.findOneBy({ table_id: storeId });
+    if (!store) {
+      throw new UnrecoverableError(`Store ${storeId} not found`);
+    }
+    return store;
   };
   /**
   private isJobOfType<T extends keyof JobRegistry>(
@@ -141,22 +156,25 @@ export class StoresConsumer extends WorkerHost {
   private buyPlan = async (
     data: JobRegistry[typeof JOB_TYPES.BUY_STORE_PLAN]['data'],
   ): Promise<JobRegistry[typeof JOB_TYPES.BUY_STORE_PLAN]['result']> => {
+    const store = await this.loadStore(data.storeId);
     const plans = await this.dataService.getPlans();
 
     const selectedPlan: Plan = plans.find(plan => plan.id == data.planId);
-    console.log(data.planId);
+    if (!selectedPlan) {
+      throw new UnrecoverableError(`Plan ${data.planId} not found`);
+    }
     if (selectedPlan.name == 'Trial' || selectedPlan.name == 'Demo' || selectedPlan.name == 'Free') {
       return this.configService.get('app_url') + '/billing';
     }
     const options: ShopifyRequestOptions = {
-      url: this.utilsService.getShopifyURLForStore('graphql.json', data.store),
-      headers: this.utilsService.getGraphQLHeadersForStore(data.store),
+      url: this.utilsService.getShopifyURLForStore('graphql.json', store),
+      headers: this.utilsService.getGraphQLHeadersForStore(store),
     };
     const variables: AppSubscriptionCreateMutationVariables = {
       name: selectedPlan.name,
       returnUrl:
         this.configService.get<string>('app_url') +
-        `/shopify/rac?planId=${selectedPlan.id}&userId=${data.userId}&storeId=${data.store.id}`,
+        `/shopify/rac?planId=${selectedPlan.id}&userId=${data.userId}&storeId=${store.id}`,
       // Only dev stores accept test charges; toggle with BILLING_TEST_MODE
       test: this.configService.get<boolean>('billing_test_mode') ?? true,
       lineItems: {
@@ -176,35 +194,45 @@ export class StoresConsumer extends WorkerHost {
     };
 
     const response = await this.utilsService.requestToShopify<AppSubscriptionCreateMutation>('post', options);
-    console.log(JSON.stringify(response));
-    if (response.statusCode === 200) {
-      if (response.respBody.appSubscriptionCreate.userErrors[0] !== undefined) {
-        throw new Error(response.respBody.appSubscriptionCreate.userErrors[0].message);
-      }
-      const url: string = response.respBody.appSubscriptionCreate.confirmationUrl;
 
-      console.log(JSON.stringify(response));
-      return url;
-      //redirect to the confirmation shopify page
-    } else if (response.statusCode === 401) {
+    if (response.statusCode === 401) {
       // Oauth failed, token expired
-      throw new TokenExpiredException(`Token expired for ${data.store.table_id}`, {
-        shop: data.store.table_id.toString(),
+      throw new TokenExpiredException(`Token expired for ${store.table_id}`, {
+        shop: store.table_id.toString(),
         jobId: '',
       });
     }
+
+    // Throws on GraphQL errors, HTTP/network failures (incl. 429 throttling) and empty bodies.
+    const body = await this.utilsService.unwrapGraphQL<AppSubscriptionCreateMutation>(
+      response,
+      'appSubscriptionCreate',
+    );
+
+    if (body.appSubscriptionCreate?.userErrors?.length) {
+      // Deterministic failure — retrying the same subscription create will not help.
+      throw new UnrecoverableError(
+        `appSubscriptionCreate userErrors: ${JSON.stringify(body.appSubscriptionCreate.userErrors)}`,
+      );
+    }
+
+    const url: string = body.appSubscriptionCreate?.confirmationUrl;
+    if (!url) {
+      throw new Error(
+        `appSubscriptionCreate returned no confirmationUrl: ${JSON.stringify(body.appSubscriptionCreate)}`,
+      );
+    }
+    // Redirect to the confirmation shopify page
+    return url;
   };
   private activateTrialForStore = async (
     data: JobRegistry[typeof JOB_TYPES.ACTIVATE_TRIAL]['data'],
   ): Promise<JobRegistry[typeof JOB_TYPES.ACTIVATE_TRIAL]['result']> => {
-    try {
-      const result = await this.dataService.setPlan(1, data.user.user_id, data.store.id);
-      if (result) {
-        return;
-      }
-    } catch (error) {
-      this.logger.error(error.message, error.stack);
-    }
+    const store = await this.loadStore(data.storeId);
+    // setPlan(planId=1, userId, storeId) — 1 is the Trial plan; store.id is the
+    // Shopify numeric id the StorePlan table is keyed by.
+    await this.dataService.setPlan(1, data.userId, store.id);
+    return true;
   };
   private retrieveStore = async (
     data: JobRegistry[typeof JOB_TYPES.GET_STORE]['data'],
@@ -229,22 +257,18 @@ export class StoresConsumer extends WorkerHost {
   private updateStoreToken = async (
     data: JobRegistry[typeof JOB_TYPES.UPDATE_STORE_TOKEN]['data'],
   ): Promise<JobRegistry[typeof JOB_TYPES.UPDATE_STORE_TOKEN]['result']> => {
-    try {
-      const { store, accessToken } = data;
-      const storeData = this.isStore(store) ? store : await this.retrieveStore(store);
-
-      if (!storeData) return false;
-
-      const updatedEntry: UpdateResult = await this.storesRepository.update(
-        { id: storeData.id },
-        { access_token: accessToken },
-      );
-
-      return updatedEntry.affected && updatedEntry.affected > 0;
-    } catch (error) {
-      this.logger.error(error.message, error.stack);
+    const { storeId, accessToken } = data;
+    const store = await this.storesRepository.findOneBy({ table_id: storeId });
+    if (!store) {
       return false;
     }
+
+    const updatedEntry: UpdateResult = await this.storesRepository.update(
+      { table_id: store.table_id },
+      { access_token: accessToken },
+    );
+
+    return updatedEntry.affected && updatedEntry.affected > 0;
   };
   private syncStore = async (
     data: JobRegistry[typeof JOB_TYPES.SYNC_STORE]['data'],
@@ -277,39 +301,41 @@ export class StoresConsumer extends WorkerHost {
     job: Job,
   ): Promise<JobRegistry[typeof JOB_TYPES.SYNC_STORE_LOCATIONS]['result']> => {
     const locations: StoreLocations[] = [];
+    const store: Store = await this.loadStore(data.storeId);
 
-    //const store: Store = this.isStore(data.store) ? data.store : await this.retrieveStore({ storeId: data.store });
-    const store: Store = data.store;
-    // console.log(store, job.data);
     const options: ShopifyRequestOptions = {
       url: this.utilsService.getShopifyURLForStore('graphql.json', store),
       headers: this.utilsService.getGraphQLHeadersForStore(store),
     };
 
-    // Follow pagination: previously only the first page was ever fetched
+    // Follow pagination to fetch every location page
     let cursor: string | null = null;
     do {
       options.data = this.syncStoreLocationsPayload(cursor);
       const response: ShopifyResponse = await this.utilsService.requestToShopify('post', options);
-      const body = await this.utilsService.unwrapGraphQL<GetShopLocationsQuery>(response, `location(${cursor ?? 0})`);
 
+      // The 401 check must run before unwrapGraphQL: unwrap would throw a plain
+      // Error for the 401 status, losing the TokenExpiredException marker.
       if (response.statusCode === 401) {
-        throw new TokenExpiredException(`Token expired for ${data.store.table_id}`, {
-          shop: data.store.table_id.toString(),
+        throw new TokenExpiredException(`Token expired for ${store.table_id}`, {
+          shop: store.table_id.toString(),
           jobId: job.id,
         });
       }
-      if (response.statusCode === 200) {
-        const result: StoreLocations[] = await this.saveStoreLocations(
-          body.locations.edges ?? [],
-          store.table_id,
-        );
-        locations.push(...result);
-        const pageInfo = body.locations.pageInfo;
-        cursor = pageInfo.hasNextPage ? pageInfo.endCursor : null;
-      } else {
-        cursor = null;
-      }
+
+      // Throws on GraphQL errors, HTTP/network failures (incl. 429 throttling) and empty bodies.
+      const body = await this.utilsService.unwrapGraphQL<GetShopLocationsQuery>(
+        response,
+        `location(${cursor ?? 0})`,
+      );
+
+      const result: StoreLocations[] = await this.saveStoreLocations(
+        body.locations.edges ?? [],
+        store.table_id,
+      );
+      locations.push(...result);
+      const pageInfo = body.locations.pageInfo;
+      cursor = pageInfo.hasNextPage ? pageInfo.endCursor : null;
     } while (cursor !== null);
 
     return locations;

@@ -99,7 +99,6 @@ export class ShopifyAuthService {
           response.respBody.access_token !== null &&
           response.respBody.access_token != undefined
         ) {
-          console.log(response.respBody);
           return response.respBody.access_token.toString();
         }
 
@@ -187,11 +186,11 @@ export class ShopifyAuthService {
 
     const createRelation: UserStore | false = await this.createSuperAdmin(result.user.user_id, result.store.table_id);
     //post install tasks
-    this.jobsService.syncProducts(result.store);
-    this.jobsService.syncOrders(result.store);
-    this.jobsService.syncCustomers(result.store);
+    this.jobsService.syncProducts(result.store.table_id, result.store.myshopify_domain);
+    this.jobsService.syncOrders(result.store.table_id, result.store.myshopify_domain);
+    this.jobsService.syncCustomers(result.store.table_id, result.store.myshopify_domain);
     this.jobsService.configure(result.store.table_id);
-    this.jobsService.activateTrial(result.store, result.user);
+    this.jobsService.activateTrial(result.store.table_id, result.user.user_id);
 
     if (typeof createRelation == 'boolean') {
       return { table_id: result.store.table_id, success: false };

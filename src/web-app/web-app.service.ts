@@ -20,6 +20,7 @@ import { ProductType } from 'src/database/entities/productType.entity';
 import { DataService } from 'src/data/data.service';
 import { isArray } from 'class-validator';
 import { StorePlan } from '../database/entities/storePlans.entity';
+import { errorResult } from 'src/jobs/constants/jobs.constants';
 
 @Injectable()
 export class WebAppService {
@@ -35,7 +36,7 @@ export class WebAppService {
 
   public syncProductTypes(store: Store) {
     try {
-      this.jobsService.syncProductTypes(store);
+      this.jobsService.syncProductTypes(store.table_id);
       //await this.jobsService.cacheProductTypes();
     } catch (error) {
       this.logger.error(error, this.syncProductTypes.name);
@@ -189,23 +190,18 @@ export class WebAppService {
       res.redirect(401, '/dashboard');
       return;
     }
-    const result = await this.jobsService.syncOrders(store);
-    if (typeof result != 'boolean' && result.status && result.status == 'AUTH_REQUIRED') {
-      console.log('this is the result:', result.status);
+    const result = await this.jobsService.syncOrders(store.table_id, store.myshopify_domain);
+    if (typeof result != 'boolean' && result.status == 'AUTH_REQUIRED') {
       const url = await this.getOAuthURL(store.myshopify_domain);
-      console.log(url);
       res.redirect(url);
     } else {
       res.redirect(`/orders?storeId=${store.id}`);
     }
   };
   public syncLocations = async (user: UserDto, res: Response): Promise<StoreLocations[] | void> => {
-    // console.log(user);
-    const result = await this.jobsService.syncStoreLocations(user.store);
-    if (result['status'] && result['status'] == 'AUTH_REQUIRED') {
+    const result = await this.jobsService.syncStoreLocations(user.store.table_id, user.store.myshopify_domain);
+    if (typeof result != 'boolean' && result['status'] == 'AUTH_REQUIRED') {
       const url = await this.getOAuthURL(user.store.myshopify_domain);
-      //res.setHeader('Access-Control-Allow-Origin', `http://localhost:3000`);
-      //res.redirect(url);
       res.status(401).send(url);
       return;
     } else {
@@ -234,15 +230,18 @@ export class WebAppService {
   };
   public syncProducts = async (user: UserDto, res: Response): Promise<boolean> => {
     try {
-      const result = await this.jobsService.syncProducts(user.store);
-      if (result['status'] == 'AUTH_REQUIRED') {
+      const result = await this.jobsService.syncProducts(user.store.table_id, user.store.myshopify_domain);
+      if (typeof result != 'boolean' && result['status'] == 'AUTH_REQUIRED') {
         const url = await this.getOAuthURL(user.store.myshopify_domain);
-        console.log(url);
         res.redirect(url);
         return false;
       }
+      // PENDING (big store, sync still running) and true are both fine here.
       return true;
-    } catch (error) { }
+    } catch (error) {
+      this.logger.error(error.message, error.stack, this.syncProducts.name);
+      throw error;
+    }
   };
   public getProducts = async (user: UserDto): Promise<object> => {
     let payload: object = {};
@@ -268,8 +267,6 @@ export class WebAppService {
     try {
       const locations: StoreLocations[] = await this.dataService.getAllLocationsOfStore(user.store_id);
       const level_one_categories: Record<string, string> = await this.dataService.getProductTypes();
-      console.log(level_one_categories);
-      //console.log(level_one_categories);
       payload = {
         ...this.getBasePayload(user),
         locations: locations,
@@ -291,8 +288,8 @@ export class WebAppService {
     }
     return members;
   };
-  public createMember = async (newMember: RegisterUserDto, storeId: number): Promise<UserStore> => {
-    let newUser: UserStore;
+  public createMember = async (newMember: RegisterUserDto, storeId: number): Promise<UserStore | errorResult> => {
+    let newUser: UserStore | errorResult;
     try {
       //replace with a dataService function
       newUser = await this.jobsService.createMember(newMember, storeId);
@@ -320,18 +317,17 @@ export class WebAppService {
     user: UserDto,
     product: newProductDto,
   ): Promise<boolean | { status: string; url: string }> => {
-    console.log(product);
-    const result = await this.jobsService.createProduct(user.store, product);
-    if (result == undefined) {
-      return true;
-    }
-    if (result['status'] == 'AUTH_REQUIRED') {
+    const result = await this.jobsService.createProduct(
+      user.store.table_id,
+      product,
+      user.store.myshopify_domain,
+    );
+    if (typeof result != 'boolean' && result['status'] == 'AUTH_REQUIRED') {
       const url = await this.getOAuthURL(user.store.myshopify_domain);
       return { status: result['status'], url };
     }
-    else if (result == false) {
-      throw Error('unexpected error');
-    }
+    // result is true (created) or PENDING (still running) — both mean the product
+    // was accepted; a hard failure would have thrown from addJob.
     return true;
   };
   public getBillingPagePayload = async (user: UserDto): Promise<object> => {
@@ -351,14 +347,11 @@ export class WebAppService {
   };
 
   async buyPlanForStore(user: UserDto, id: number): Promise<string> {
-
-    const result = await this.jobsService.buyPlan(id, user.user_id, user.store);
-    if (result['status'] == 'AUTH_REQUIRED') {
+    const result = await this.jobsService.buyPlan(id, user.user_id, user.store.table_id);
+    if (typeof result != 'string' && result['status'] == 'AUTH_REQUIRED') {
       return await this.getOAuthURL(user.store.myshopify_domain);
-      //console.log(url);
-      // res.redirect(url);
     }
-    return result;
+    return result as string;
   }
 
 }

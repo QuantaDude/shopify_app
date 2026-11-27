@@ -1,11 +1,12 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { JOB_TYPES, JobRegistry, QUEUES } from '../constants/jobs.constants';
+import { AUTH_REQUIRED_REASON, JOB_TYPES, JobRegistry, QUEUES } from '../constants/jobs.constants';
 import { Logger } from '@nestjs/common';
 import { Job, UnrecoverableError } from 'bullmq';
 import { ConfigService } from '@nestjs/config';
 import { UtilsService } from 'src/utils/utils.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Order } from 'src/database/entities/order.entity';
+import { Store } from 'src/database/entities/store.entity';
 import { Repository } from 'typeorm';
 import { ShopifyRequestOptions } from 'src/utils/types/ShopifyRequestOptions';
 
@@ -38,20 +39,16 @@ export class OrdersConsumer extends WorkerHost {
 
     @InjectRepository(Order)
     private readonly ordersRepository: Repository<Order>,
+    @InjectRepository(Store)
+    private readonly storesRepository: Repository<Store>,
   ) {
     super();
   }
 
   public process = async (job: OrderJobs): Promise<JobRegistry[OrderJobNames]['result']> => {
     try {
-      //const store: Store = job.data;
-
       switch (job.name) {
         case JOB_TYPES.SYNC_ORDERS:
-          if (typeof job.data == 'number') {
-            throw new Error('Invalid job data, Store expected recieved number type.');
-          }
-
           return await this.syncOrders(job.data, job);
 
         case JOB_TYPES.GET_ORDERS:
@@ -62,47 +59,54 @@ export class OrdersConsumer extends WorkerHost {
           throw new Error('Invalid job name');
       }
     } catch (error) {
-      // Only mark unrecoverable for token expiry; other errors stay retryable
-      if (error['isTokenExpired'] || error.message == '401') {
-        await job.moveToFailed(new UnrecoverableError(`401`), job.token);
+      // Only mark unrecoverable for token expiry; other errors stay retryable.
+      // The fixed '401' failedReason is what JobsService.addJob matches AUTH_REQUIRED on.
+      if (error['isTokenExpired'] || error.message === AUTH_REQUIRED_REASON) {
+        throw new UnrecoverableError(AUTH_REQUIRED_REASON);
       }
       throw error;
     }
+  };
+
+  /**
+   * Job data only carries the store table_id (no access tokens in Redis),
+   * so every Shopify-backed handler loads the store fresh from the DB.
+   */
+  private loadStore = async (storeId: number): Promise<Store> => {
+    const store = await this.storesRepository.findOneBy({ table_id: storeId });
+    if (!store) {
+      throw new UnrecoverableError(`Store ${storeId} not found`);
+    }
+    return store;
   };
 
   private syncOrders = async (
     data: JobRegistry[typeof JOB_TYPES.SYNC_ORDERS]['data'],
     job: Job,
   ): Promise<JobRegistry[typeof JOB_TYPES.SYNC_ORDERS]['result']> => {
-    const store = data.store;
+    const store = await this.loadStore(data.storeId);
     const options: ShopifyRequestOptions = {
       url: this.utilsService.getShopifyURLForStore('graphql.json', store),
       headers: this.utilsService.getGraphQLHeadersForStore(store),
     };
-    //const headers: AxiosHeaders = this.utilsService.getGraphQLHeadersForStore(store);
     let cursor: string | null = null;
 
     do {
       options.data = this.getQueryObjectForOrders(cursor);
       const response = await this.utilsService.requestToShopify<SyncOrdersQuery>('post', options);
-      //console.log(JSON.stringify(response))
+
       if (response.statusCode == 401) {
-        throw new TokenExpiredException(`Token expired for ${data.store.table_id}`, {
-          shop: data.store.table_id.toString(),
+        throw new TokenExpiredException(`Token expired for ${store.table_id}`, {
+          shop: store.table_id.toString(),
           jobId: job.id,
         });
+      }
 
-        //          throw Error('401');
-      }
-      //throw Error('401');
-      if (response.statusCode == 200) {
-        await this.saveOrdersInDB(store.table_id, response.respBody);
-      }
-      //console.log(response.respBody['extensions']['cost']['fields']);
-      // console.log(response.respBody["data"]['orders']['edges']);
-      // await this.saveOrdersInDB(store.table_id, response.respBody["data"]['orders']['edges']);
-      //console.log(response.respBody);
-      cursor = this.getCursorFromResponse(response.respBody.orders.pageInfo);
+      // Throws on GraphQL errors, HTTP/network failures (incl. 429 throttling) and empty bodies.
+      const body = await this.utilsService.unwrapGraphQL<SyncOrdersQuery>(response, 'syncOrders', job);
+
+      await this.saveOrdersInDB(store.table_id, body);
+      cursor = this.getCursorFromResponse(body.orders.pageInfo);
     } while (cursor !== null);
     return true;
   };
@@ -126,9 +130,11 @@ export class OrdersConsumer extends WorkerHost {
           // `legacyResourceId` is `UnsignedInt64` (a number) in 2026-10
           id: node.legacyResourceId,
           financial_status: node.displayFinancialStatus,
-          closed_at: new Date(node.closedAt),
+          // `closedAt`/`cancelledAt` are null while an order is open — `new Date(null)`
+          // would silently store 1970-01-01, so keep them null instead.
+          closed_at: node.closedAt ? new Date(node.closedAt) : null,
           cancel_reason: node.cancelReason,
-          cancelled_at: new Date(node.cancelledAt),
+          cancelled_at: node.cancelledAt ? new Date(node.cancelledAt) : null,
           created_at: new Date(node.createdAt),
           updated_at: new Date(node.updatedAt),
           tags: Array.isArray(node.tags) ? JSON.stringify(node.tags) : node.tags,

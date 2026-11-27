@@ -28,10 +28,19 @@ export class AccessTokenGuard implements CanActivate {
   ) { }
 
   private extractToken = (request: TRequest<Record<string, any>, { storeId?: string }>): string | undefined => {
-    // console.log(request.body);
-
-    const [_, token] = String(request.headers.authorization ?? '').split(' ');
-    return token;
+    // Prefer the Authorization header (API clients)...
+    const header = String(request.headers.authorization ?? '');
+    if (header) {
+      const [_, token] = header.split(' ');
+      if (token) {
+        return token;
+      }
+    }
+    // ...and fall back to the session cookie set by POST /login. Routes outside
+    // the web-app AuthMiddleware (e.g. the Shopify billing return URL) rely on
+    // this: Shopify redirects the merchant's browser there as a top-level GET,
+    // which does carry the lax access_token cookie but no Authorization header.
+    return (request as unknown as Request).cookies?.['access_token'];
   };
 
   async canActivate(context: ExecutionContext): Promise<boolean> {

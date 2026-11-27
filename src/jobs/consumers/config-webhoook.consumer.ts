@@ -1,6 +1,6 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { JOB_TYPES, JobRegistry, QUEUES } from '../constants/jobs.constants';
-import { Job } from 'bullmq';
+import { Job, UnrecoverableError } from 'bullmq';
 import { Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Store } from 'src/database/entities/store.entity';
@@ -47,6 +47,9 @@ export class ConfigWebhookConsumer extends WorkerHost {
     const storeId = job.data.storeId;
 
     const store = await this.storesRepository.findOneBy({ table_id: storeId });
+    if (!store) {
+      throw new UnrecoverableError(`Store ${storeId} not found`);
+    }
 
     const requestOptions: ShopifyRequestOptions = {
       // REST Admin API is legacy: create webhooks through the GraphQL API
@@ -68,6 +71,15 @@ export class ConfigWebhookConsumer extends WorkerHost {
       };
 
       const response: ShopifyResponse = await this.utilsService.requestToShopify('post', requestOptions);
+      if (response.error || (response.statusCode ?? 0) >= 400) {
+        // One topic failing should fail the job so BullMQ retries the whole configuration.
+        this.logger.error(
+          `Webhook subscription for topic ${element} failed: ${response.statusCode} ${response.errorMessage ?? ''}`,
+        );
+        throw new Error(
+          `Webhook subscription for topic ${element} failed: ${response.statusCode} ${response.errorMessage ?? ''}`,
+        );
+      }
       this.logger.debug(`Response for topic ${element} : ${JSON.stringify(response.respBody)}`);
     }
   };

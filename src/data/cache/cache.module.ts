@@ -13,26 +13,16 @@ import Redlock from 'redlock';
       provide: 'REDIS_CLIENT',
       useFactory: (config: ConfigService) => {
         const clientType: RedisClientType = createClient({
-          url: `redis://${config.get('redis.host', 'localhost')}:${config.get('redis.port', '6739')}`,
+          // NOTE: the fallback here used to be '6739' (a typo). Redis default is 6379.
+          url: `redis://${config.get('redis.host', 'localhost')}:${config.get('redis.port', '6379')}`,
         });
         return createKeyv(clientType);
-        /*return new Client({
-          host: config.get('redis.host', 'localhost'),
-          port: config.get('redis.port', 6379),
-          maxRetriesPerRequest: null, // Critical for Redlock
-        });*/
       },
       inject: [ConfigService],
     },
     {
       provide: 'CACHE_INSTANCE',
       useFactory: (redisClient: Keyv, config: ConfigService) => {
-
-        // Correct usage per function signature
-        // const keyv = createKeyv(redisClient, {
-        //   // Add any KeyvRedisOptions here if needed
-        // });
-
         return new Cacheable({
           primary: redisClient,
           ttl: config.get('cache.ttl', '5m'),
@@ -42,12 +32,13 @@ import Redlock from 'redlock';
     },
     {
       provide: 'CACHE_LOCK',
-      useFactory: (redisClient: Client, config: ConfigService) => {
-        const client =  new Client({
+      useFactory: (config: ConfigService) => {
+        // Redlock needs an ioredis-style client, not the Keyv wrapper.
+        const client = new Client({
           host: config.get('redis.host', 'localhost'),
           port: config.get('redis.port', 6379),
           maxRetriesPerRequest: null, // Critical for Redlock
-        })
+        });
         return new Redlock([client], {
           driftFactor: 0.01,
           retryCount: 2,
@@ -56,7 +47,7 @@ import Redlock from 'redlock';
           automaticExtensionThreshold: 0,
         });
       },
-      inject: ['REDIS_CLIENT', ConfigService],
+      inject: [ConfigService],
     },
     CacheService,
   ],

@@ -9,6 +9,8 @@ export default () => ({
 
   app_secret: process.env.APP_SECRET,
   app_url: process.env.APP_URL,
+  // Secret for the double-csrf token signing (CsrfProvider).
+  csrf_secret: process.env.CSRF_SECRET,
   app_install_URL: `${process.env.APP_URL}/shopify/auth/redirect`,
   refresh_token_URL: `${process.env.APP_URL}/shopify/auth/updateStoreToken`,
 

@@ -1,61 +1,25 @@
 import { Injectable, NestMiddleware } from '@nestjs/common';
-import { Request, Response, NextFunction } from 'express';
-import { doubleCsrf, DoubleCsrfConfigOptions } from 'csrf-csrf';
+import { NextFunction, Request, Response } from 'express';
+import { CsrfProvider } from '../utils/providers/csrf.provider';
 
+/**
+ * Applies CSRF validation to state-changing requests.
+ *
+ * All of the configuration (secret, cookie, token sources) lives in CsrfProvider,
+ * which is the same instance used to mint tokens for the views, so a token
+ * generated on one page is always validatable here.
+ *
+ * Route notes:
+ *  - Safe methods (GET/HEAD/OPTIONS) are skipped by the library itself, so no
+ *    per-route special cases are needed for page rendering.
+ *  - POST /login is exempted in AppModule (the login page cannot carry a token yet),
+ *    and /shopify/* routes (OAuth + webhooks) are excluded there as well.
+ * */
 @Injectable()
 export class CsrfMiddleware implements NestMiddleware {
-  private doubleCsrfProtection;
-  private generateCsrfToken;
-  constructor() {
-    //console.log(process.env.CSRF_SECRET)
-    const config: DoubleCsrfConfigOptions = {
-      getSecret: () => process.env.CSRF_SECRET,
-      cookieName: 'x-csrf-token',
-      cookieOptions: {
-        httpOnly: true,
-        sameSite: 'strict',
-        secure: process.env.NODE_ENV === 'production',
-        path: '/',
-        //signed: false,
-      },
-      size: 64,
-      //getTokenFromRequest: (req) => { return req.cookies['x-csrf-token'].split('|')[0] },
-      getCsrfTokenFromRequest: req => {
-        return req.header('x-csrf-token');
-      },
-      getSessionIdentifier: req => {
-        return req.header('access_token') ?? req.cookies['access_token'];
-      },
-      errorConfig: { // Optional: Customize error properties if needed
-        statusCode: 403,
-        message: 'Invalid CSRF Token',
-        code: 'EBADCSRFTOKEN',
-      },
-    };
-
-    const {
-      generateCsrfToken,
-      doubleCsrfProtection,
-      invalidCsrfTokenError,
-    } = doubleCsrf(config);
-
-    this.doubleCsrfProtection = doubleCsrfProtection;
-    this.generateCsrfToken = generateCsrfToken;
-  }
+  constructor(private readonly csrfProvider: CsrfProvider) {}
 
   use(req: Request, res: Response, next: NextFunction) {
-    //console.log(req.baseUrl);
-    //console.log(req.cookies['x-csrf-token'])
-    //console.log(req.headers);
-
-    // instead of doing this, use .exclude in app.module.ts . exclude /webhook/*, post login route
-    if (req.baseUrl === '/login' && req.method === 'POST') {
-      //this.generateCsrfToken(req, res, next);
-      return next();
-    } else if(req.baseUrl === '/dashboard' && req.method === 'GET') {
-      this.generateCsrfToken(req,res, next);
-      return next();
-    }
-    this.doubleCsrfProtection(req, res, next);
+    this.csrfProvider.protect(req, res, next);
   }
 }

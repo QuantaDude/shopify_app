@@ -1,4 +1,4 @@
-import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
 
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import configuration from './config/configuration';
@@ -51,8 +51,9 @@ const ENV = process.env.NODE_ENV;
     ConfigModule.forRoot({
       isGlobal: true,
       load: [configuration],
-      //envFilePath: ['.env.development']
-      envFilePath: !ENV ? '.env' : `.env.${ENV}`,
+      // Fall back from the environment-specific file to the base .env, so
+      // NODE_ENV=production with only .env present still loads secrets.
+      envFilePath: !ENV ? ['.env'] : [`.env.${ENV}`, '.env'],
     }),
 
     // For running cron jobs.
@@ -69,10 +70,11 @@ const ENV = process.env.NODE_ENV;
   controllers: [],
 
   providers: [
-    // {
-    //   provide: APP_GUARD,
-    //   useClass: RateLimitingGuard,
-    // },
+    // Format CSRF failures as clean 403s everywhere (middleware and controllers).
+    {
+      provide: APP_FILTER,
+      useClass: CsrfExceptionFilter,
+    },
 
     // To run tasks which need to run once during startup.
     StartupService,
@@ -81,7 +83,17 @@ const ENV = process.env.NODE_ENV;
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(CsrfMiddleware).exclude('/shopify/*path').forRoutes('*');
+    consumer
+      .apply(CsrfMiddleware)
+      // /shopify/* hosts the OAuth callbacks (Shopify hits them as cross-site
+      // redirects) and webhooks (server-to-server); neither can carry our CSRF
+      // token. POST /login is the bootstrap: the login page cannot mint a
+      // token before a session exists. Everything else is validated.
+      .exclude(
+        { path: 'login', method: RequestMethod.POST },
+        '/shopify/*path',
+      )
+      .forRoutes('*');
   }
 }
 

@@ -45,6 +45,7 @@ export class CronConsumer extends WorkerHost {
       }
     } catch (error) {
       this.logger.error(error.message, error.stack);
+      throw error;
     }
   };
 
@@ -98,30 +99,44 @@ export class CronConsumer extends WorkerHost {
 
         const response = await this.utilsService.requestToShopify<GetSubscriptionStateQuery>('post', request);
 
-        if (response.statusCode === 200) {
-          //if(response.respBody.appByKey.installation.activeSubscriptions)
-          if (response.respBody.appByKey.installation.activeSubscriptions[0].status != storePlan.status) {
-            if (
-              response.respBody.appByKey.installation.activeSubscriptions[0].status == 'ACTIVE' ||
-              response.respBody.appByKey.installation.activeSubscriptions[0].status == 'ACCEPTED'
-            ) {
-              //check charge id before setting credits
-              // Look the plan up by id instead of relying on insertion order
-              const plans = await this.dataService.getPlans();
-              const plan = plans.find(pl => pl.id === storePlan.plan_id);
-              if (plan != null) {
-                storePlan.credits += plan.credits;
-              }
+        if (response.statusCode !== 200) {
+          this.logger.warn(
+            `Subscription state query for charge ${chargeId} returned ${response.statusCode}`,
+          );
+          continue;
+        }
+
+        const activeSubscriptions =
+          response.respBody?.appByKey?.installation?.activeSubscriptions ?? [];
+        if (activeSubscriptions.length === 0) {
+          this.logger.warn(
+            `No active subscriptions reported for charge ${chargeId}; leaving it pending`,
+          );
+          continue;
+        }
+
+        if (activeSubscriptions[0].status != storePlan.status) {
+          if (
+            activeSubscriptions[0].status == 'ACTIVE' ||
+            activeSubscriptions[0].status == 'ACCEPTED'
+          ) {
+            //check charge id before setting credits
+            // Look the plan up by id instead of relying on insertion order
+            const plans = await this.dataService.getPlans();
+            const plan = plans.find(pl => pl.id === storePlan.plan_id);
+            if (plan != null) {
+              storePlan.credits += plan.credits;
             }
-            storePlan.status = response.respBody.appByKey.installation.activeSubscriptions[0].status;
-            await this.dataService.updatePlan(storePlan);
-            await this.dataService.deletePendingSub(chargeId);
-            if (await this.cacheService.has(`${store.id}-credits`)) {
-              const lock = await this.dataService.getStoreCreditsLock(store.id);
-              if (lock != undefined) {
-                await this.cacheService.set(`${store.id}-credits`, storePlan.credits, 0);
-              }
-              lock.release();
+          }
+          storePlan.status = activeSubscriptions[0].status;
+          await this.dataService.updatePlan(storePlan);
+          await this.dataService.deletePendingSub(chargeId);
+          if (await this.cacheService.has(`${store.id}-credits`)) {
+            const lock = await this.dataService.getStoreCreditsLock(store.id);
+            try {
+              await this.cacheService.set(`${store.id}-credits`, storePlan.credits, 0);
+            } finally {
+              await lock?.release();
             }
           }
         }

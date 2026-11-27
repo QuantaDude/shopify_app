@@ -10,7 +10,6 @@ export class IsAppPublicMiddleware implements NestMiddleware {
     if (store == null || store == undefined) {
       res.redirect('/');
     }
-    console.log(store.store.IsPrivate());
 
     next();
   }

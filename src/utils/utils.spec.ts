@@ -10,7 +10,7 @@ import * as crypto from 'crypto';
 
 describe('Utils', () => {
   let provider: UtilsService;
-  let configService: { get: vi.Mock };
+  let configService: { get: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     configService = { get: vi.fn() };
@@ -28,7 +28,7 @@ describe('Utils', () => {
         UtilsService,
         { provide: ConfigService, useValue: configService },
         { provide: HttpService, useValue: { request: vi.fn() } },
-        { provide: CsrfProvider, useValue: { generateToken: vi.fn(), getGenerateToken: vi.fn() } },
+        { provide: CsrfProvider, useValue: { generateToken: vi.fn() } },
         { provide: getRepositoryToken(Store), useValue: { findOneBy: vi.fn() } },
       ],
     }).compile();

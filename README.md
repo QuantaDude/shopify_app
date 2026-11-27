@@ -20,8 +20,7 @@ A Shopify stores management app.
 ## Requirements
 
 - **Node.js >= 20.19** (22.12+ or 24.x recommended; the framework packages are ESM-only and loaded through `require(esm)`)
-- PostgreSQL
-- Redis
+- Docker
 
 ## Project setup
 
@@ -33,6 +32,7 @@ $ npm run graphql:types
 
 # build
 $ npm run build
+$ docker compose up
 
 # tests (unit + e2e; e2e needs PostgreSQL + Redis running)
 $ npm test
@@ -107,12 +107,8 @@ $ npm run seed                 # seed plans
 # development
 $ npm run start:dev
 
+$ docker compose up
 # production
 $ npm run build
 $ npm run start:prod
 ```
-
-## Docs
-
-See [MIGRATION.md](./MIGRATION.md) for the full record of the
-NestJS 11 → 12 / TypeORM 0.3 → 1 / Shopify 2024-07 → 2026-10 migration.

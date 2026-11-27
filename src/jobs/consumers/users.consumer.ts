@@ -50,6 +50,7 @@ export class UsersConsumer extends WorkerHost {
       }
     } catch (error) {
       this.logger.error(error.message, error.stack, this.process.name);
+      throw error;
     }
   };
 
@@ -60,7 +61,6 @@ export class UsersConsumer extends WorkerHost {
       where: { user_id: data.userId },
       relations: { store: true },
     });
-    console.log(stores[0].store.IsPrivate());
     return stores;
   };
 

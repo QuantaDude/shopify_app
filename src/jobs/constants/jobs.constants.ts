@@ -7,7 +7,6 @@ import { StoreLocations } from 'src/database/entities/storeLocations.entity';
 import { UserStore } from 'src/database/entities/userstore.entity';
 import { newProductDto } from 'src/web-app/dtos/new-product.dto';
 import { RegisterUserDto } from 'src/web-app/dtos/register-member.dto';
-import { User } from '../../database/entities/user.entity';
 
 /**
  * all the queues used in jobs module. Immutable.
@@ -21,6 +20,16 @@ export const QUEUES = {
   CONFIGURE: 'configure',
   CRON: 'cron',
 } as const;
+
+/**
+ * Failed-reason marker used by consumers when a Shopify call returns 401.
+ *
+ * Consumers throw `new UnrecoverableError(AUTH_REQUIRED_REASON)`; BullMQ stores
+ * the message as the job's failedReason, and `waitUntilFinished` rejects with
+ * `new Error(failedReason)` on the caller side, so JobsService.addJob can match
+ * it without knowing the original exception type.
+ */
+export const AUTH_REQUIRED_REASON = '401';
 
 /**
  * All job type constants
@@ -68,14 +77,18 @@ export const JOB_TYPES = {
  * It acts as a single source of truth. Avoids mismatches and reduces lines of code in jobs service.
  * */
 export type errorResult = {
-  status: string;
-  shopDomain: string;
+  /** 'AUTH_REQUIRED' when the store must re-authenticate, 'PENDING' when the job is still running past the wait timeout. */
+  status: 'AUTH_REQUIRED' | 'PENDING';
+  shopDomain?: string;
+  /** BullMQ job id, set for PENDING results so the job can be inspected. */
+  jobId?: string;
 };
 export type JobRegistry = {
   /** for product jobs*/
   [JOB_TYPES.SYNC_PRODUCTS]: {
     queue: typeof QUEUES.PRODUCTS;
-    data: { store: Store };
+    /** storeId is the store table_id; consumers load the store fresh from the DB so no access tokens are persisted in Redis. */
+    data: { storeId: number };
     result: boolean;
   };
   [JOB_TYPES.GET_PRODUCTS]: {
@@ -85,7 +98,7 @@ export type JobRegistry = {
   };
   [JOB_TYPES.CREATE_PRODUCT]: {
     queue: typeof QUEUES.PRODUCTS;
-    data: { product: newProductDto; store: Store };
+    data: { product: newProductDto; storeId: number };
     result: boolean;
   };
   [JOB_TYPES.GET_PRODUCT_TYPE_NAMES]: {
@@ -105,7 +118,7 @@ export type JobRegistry = {
   };
   [JOB_TYPES.SYNC_PRODUCT_TYPES]: {
     queue: typeof QUEUES.PRODUCTS;
-    data: { store: Store };
+    data: { storeId: number };
     result: null | errorResult;
   };
   [JOB_TYPES.CACHE_PRODUCT_TYPES]: {
@@ -121,8 +134,8 @@ export type JobRegistry = {
   /** for order jobs*/
   [JOB_TYPES.SYNC_ORDERS]: {
     queue: typeof QUEUES.ORDERS;
-    data: { store: Store };
-    result: { status?: string; shopDomain?: string } | boolean;
+    data: { storeId: number };
+    result: boolean;
   };
   [JOB_TYPES.GET_ORDERS]: {
     queue: typeof QUEUES.ORDERS;
@@ -147,17 +160,17 @@ export type JobRegistry = {
   };
   [JOB_TYPES.SYNC_STORE_LOCATIONS]: {
     queue: typeof QUEUES.STORES;
-    data: { store: Store };
-    result: StoreLocations[] | null | { status: string; shopDomain: string };
+    data: { storeId: number };
+    result: StoreLocations[] | null;
   };
   [JOB_TYPES.ACTIVATE_TRIAL]: {
     queue: typeof QUEUES.STORES;
-    data: { store: Store; user: User };
+    data: { storeId: number; userId: number };
     result: boolean;
   };
   [JOB_TYPES.BUY_STORE_PLAN]: {
     queue: typeof QUEUES.STORES;
-    data: { store: Store; planId: number; userId: number };
+    data: { storeId: number; planId: number; userId: number };
     result: string;
   };
   [JOB_TYPES.GET_STORE]: {
@@ -180,8 +193,8 @@ export type JobRegistry = {
   /**For Customer queue jobs*/
   [JOB_TYPES.SYNC_CUSTOMERS]: {
     queue: typeof QUEUES.CUSTOMERS;
-    data: { store: Store };
-    result: void;
+    data: { storeId: number };
+    result: boolean;
   };
   [JOB_TYPES.GET_CUSTOMERS]: {
     queue: typeof QUEUES.CUSTOMERS;
@@ -207,7 +220,7 @@ export type JobRegistry = {
   };
   [JOB_TYPES.UPDATE_STORE_TOKEN]: {
     queue: typeof QUEUES.STORES;
-    data: { store: Store; accessToken: string };
+    data: { storeId: number; accessToken: string };
     result: boolean;
   };
   [JOB_TYPES.CONFIGURE_WEBHOOKS]: {
